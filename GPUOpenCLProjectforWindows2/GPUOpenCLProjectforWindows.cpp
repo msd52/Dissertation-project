@@ -20,6 +20,7 @@
  * problem reports or change requests be submitted to it directly
  *****************************************************************************/
 
+#include <iostream>
 #include <stdio.h>
 #include <stdlib.h>
 #include <tchar.h>
@@ -480,6 +481,25 @@ void generateInput(cl_int* inputArray, cl_uint arrayWidth, cl_uint arrayHeight)
     }
 }
 
+void generateMatrices(cl_int* inputArray, cl_uint arrayWidth, cl_uint arrayHeight)
+{
+    srand(12345);
+    int temp = 0;
+
+    // random initialization of input
+    cl_uint array_size = arrayWidth * arrayHeight;
+    for (cl_uint i = 0; i < array_size; ++i)
+    {   
+        temp = rand();
+        inputArray[i] = temp;
+        std::cout << temp<<" ";
+        if ((i + 1) % arrayWidth == 0) {
+            std::cout << '\n';
+        }
+    }
+
+    std::cout << std::string(10,'\n');
+}
 
 /*
  * This function picks/creates necessary OpenCL objects which are needed.
@@ -817,8 +837,8 @@ int _tmain(int argc, TCHAR* argv[])
     LARGE_INTEGER performanceCountNDRangeStart;
     LARGE_INTEGER performanceCountNDRangeStop;
 
-    cl_uint arrayWidth  = 1024;
-    cl_uint arrayHeight = 1024;
+    cl_uint arrayWidth  = 16;
+    cl_uint arrayHeight = 16;
 
     //initialize Open CL objects (context, queue, etc.)
     if (CL_SUCCESS != SetupOpenCL(&ocl, deviceType))
@@ -839,8 +859,8 @@ int _tmain(int argc, TCHAR* argv[])
     }
 
     //random input
-    generateInput(inputA, arrayWidth, arrayHeight);
-    generateInput(inputB, arrayWidth, arrayHeight);
+    generateMatrices(inputA, arrayWidth, arrayHeight);
+    generateMatrices(inputB, arrayWidth, arrayHeight);
 
     // Create OpenCL buffers from host memory
     // These buffers will be used later by the OpenCL kernel
@@ -904,11 +924,23 @@ int _tmain(int argc, TCHAR* argv[])
             1000.0f*(float)(performanceCountNDRangeStop.QuadPart - performanceCountNDRangeStart.QuadPart) / (float)perfFrequency.QuadPart);
     }
     
+
+    cl_uint arrayLength = arrayWidth * arrayHeight;
+    for (cl_uint i = 0; i < arrayLength; i++)
+    {
+        std::cout << outputC[i]<<" ";
+        if ((i + 1) % arrayWidth == 0) {
+            std::cout << '\n';
+        }
+    }
+   
+
     _aligned_free(inputA);
     _aligned_free(inputB);
     _aligned_free(outputC);
 
-    std::cout << "May god be with you"<<endl;
+    std::cout << "May god be with you" <<std::endl;
+    system("pause");
     return 0;
 }
 
