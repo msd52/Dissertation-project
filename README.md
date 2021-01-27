@@ -1,0 +1,2 @@
+# GPUOpenCLProjectforWindows2
+Dissertation project
