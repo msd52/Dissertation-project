@@ -375,6 +375,56 @@ cl_platform_id FindOpenCLPlatform(const char* preferredPlatform, cl_device_type 
 }
 
 
+//My code, goes over all devices and prints their features
+int PrintDeviceIDs(cl_platform_id platformId)
+{
+    cl_int err = CL_SUCCESS;
+
+    // Read the platform's version string length (param_value is NULL).
+    // The value returned in stringLength
+    cl_uint numEntries = 0;
+    err = clGetDeviceIDs(platformId, CL_DEVICE_TYPE_GPU, 0, NULL, &numEntries);
+    if (CL_SUCCESS != err)
+        return err;
+
+    // Now, that we know the platform's version string length, we can allocate enough space before read it
+    cl_device_id* deviceIds= (cl_device_id*)malloc(sizeof(cl_device_id)*numEntries);
+
+    // Read the platform's version string
+    // The read value returned in platformVersion
+    err = clGetDeviceIDs(platformId, CL_DEVICE_TYPE_GPU, numEntries, deviceIds, NULL);
+    if (CL_SUCCESS != err)
+        return err;
+
+    cl_device_id temp;
+    cl_device_type deviceType;
+    cl_uint computeUnits;
+    cl_uint nDims;
+    size_t wGSize;
+    std::cout << "THIS MANY DEVICES "<<numEntries;
+    for (int i = 0; i < numEntries; i++) {
+        temp = deviceIds[i];
+
+        err = clGetDeviceInfo(temp, CL_DEVICE_TYPE, sizeof(cl_device_type), &deviceType, NULL);
+        std::cout << "deviceId: "<<deviceIds[i]<<'\n';
+        err = clGetDeviceInfo(temp, CL_DEVICE_MAX_COMPUTE_UNITS, sizeof(cl_device_type), &computeUnits, NULL);
+        std::cout << "computeUnits: "<<computeUnits << '\n';
+        err = clGetDeviceInfo(temp, CL_DEVICE_MAX_WORK_ITEM_DIMENSIONS, sizeof(cl_uint), &nDims, NULL);
+        std::cout <<"nDims: "<< nDims << '\n';
+
+        //cl_uint optimizedSize = ((sizeof(size_t) * nDims - 1) / 64 + 1) * 64;
+        //size_t* wGSizeArray = (size_t*)_aligned_malloc(optimizedSize, 4096);
+        size_t* wGSizeArray = (size_t*)malloc(sizeof(size_t)*nDims);
+        err = clGetDeviceInfo(temp, CL_DEVICE_MAX_WORK_ITEM_SIZES, sizeof(size_t)*nDims, wGSizeArray, NULL);
+        for (int i=0; i<nDims; i++)
+            std::cout <<"Workgroup dim "<<i<<" is "<< wGSizeArray[i] << '\n';
+        err = clGetDeviceInfo(temp, CL_DEVICE_MAX_WORK_GROUP_SIZE, sizeof(size_t), &wGSize, NULL);
+        std::cout << "WG size: "<<wGSize << '\n';
+        free(wGSizeArray);
+    }
+}
+
+
 /*
  * This function read the OpenCL platdorm and device versions
  * (using clGetxxxInfo API) and stores it in the ocl structure.
@@ -939,6 +989,8 @@ int _tmain(int argc, TCHAR* argv[])
     _aligned_free(inputB);
     _aligned_free(outputC);
 
+    cl_platform_id platformId = FindOpenCLPlatform("Intel", deviceType);
+    PrintDeviceIDs(platformId);
     std::cout << "May god be with you" <<std::endl;
     system("pause");
     return 0;
