@@ -20,6 +20,7 @@
  * problem reports or change requests be submitted to it directly
  *****************************************************************************/
 
+#include <random>
 #include <iostream>
 #include <stdio.h>
 #include <stdlib.h>
@@ -153,21 +154,20 @@ struct ocl_args_d_t
     cl_mem           dstMem;            // hold destination buffer
 };
 
-ocl_args_d_t::ocl_args_d_t():
-        context(NULL),
-        device(NULL),
-        commandQueue(NULL),
-        program(NULL),
-        kernel(NULL),
-        platformVersion(OPENCL_VERSION_1_2),
-        deviceVersion(OPENCL_VERSION_1_2),
-        compilerVersion(OPENCL_VERSION_1_2),
-        srcA(NULL),
-        srcB(NULL),
-        dstMem(NULL)
+ocl_args_d_t::ocl_args_d_t() :
+    context(NULL),
+    device(NULL),
+    commandQueue(NULL),
+    program(NULL),
+    kernel(NULL),
+    platformVersion(OPENCL_VERSION_1_2),
+    deviceVersion(OPENCL_VERSION_1_2),
+    compilerVersion(OPENCL_VERSION_1_2),
+    srcA(NULL),
+    srcB(NULL),
+    dstMem(NULL)
 {
 }
-
 /*
  * destructor - called only once
  * Release all OpenCL objects
@@ -179,7 +179,7 @@ ocl_args_d_t::ocl_args_d_t():
  * or recreate OpenCL objects with different parameters.
  *
  */
-ocl_args_d_t::~ocl_args_d_t()
+    ocl_args_d_t::~ocl_args_d_t()
 {
     cl_int err = CL_SUCCESS;
 
@@ -249,7 +249,7 @@ ocl_args_d_t::~ocl_args_d_t()
     }
 
     /*
-     * Note there is no procedure to deallocate platform 
+     * Note there is no procedure to deallocate platform
      * because it was not created at the startup,
      * but just queried from OpenCL runtime.
      */
@@ -530,25 +530,31 @@ void generateInput(cl_int* inputArray, cl_uint arrayWidth, cl_uint arrayHeight)
         inputArray[i] = rand();
     }
 }
+ 
 
-void generateMatrices(cl_int* inputArray, cl_uint arrayWidth, cl_uint arrayHeight)
+void mGenerateMatrices(cl_int* inputArray, cl_uint height, cl_uint width)
 {
-    srand(12345);
+    //srand(12345);
     int temp = 0;
 
+    std::random_device rd; // obtain a random number from hardware
+    std::mt19937 gen(rd()); // seed the generator
+    std::uniform_int_distribution<> distr(-5, 5); // define the range
+
+
     // random initialization of input
-    cl_uint array_size = arrayWidth * arrayHeight;
+    cl_uint array_size = height * width;
     for (cl_uint i = 0; i < array_size; ++i)
-    {   
-        temp = rand();
+    {
+        temp = distr(gen);
         inputArray[i] = temp;
-        std::cout << temp<<" ";
-        if ((i + 1) % arrayWidth == 0) {
+        std::cout << temp << " ";
+        if ((i + 1) % width == 0) {
             std::cout << '\n';
         }
     }
 
-    std::cout << std::string(10,'\n');
+    std::cout << std::string(10, '\n');
 }
 
 /*
@@ -626,7 +632,7 @@ int SetupOpenCL(ocl_args_d_t *ocl, cl_device_type deviceType)
         LogError("Error: clCreateCommandQueue() returned %s.\n", TranslateOpenCLError(err));
         return err;
     }
-
+    
     return CL_SUCCESS;
 }
 
@@ -754,11 +760,102 @@ int CreateBufferArguments(ocl_args_d_t *ocl, cl_int* inputA, cl_int* inputB, cl_
     return CL_SUCCESS;
 }
 
+int mCreateBufferArguments(ocl_args_d_t* ocl, cl_int* inputA, cl_int* inputB, cl_int* outputC, cl_uint mDim, cl_uint pDim, cl_uint nDim)
+{
+    cl_int err = CL_SUCCESS;
+
+    cl_image_format format;
+    cl_image_desc desc;
+
+    // Define the image data-type and order -
+    // one channel (R) with unit values
+    format.image_channel_data_type = CL_UNSIGNED_INT32;
+    format.image_channel_order = CL_R;
+
+    // Define the image properties (descriptor)
+    desc.image_type = CL_MEM_OBJECT_IMAGE2D;
+    desc.image_width = pDim;
+    desc.image_height = mDim;
+    desc.image_depth = 0;
+    desc.image_array_size = 1;
+    desc.image_row_pitch = 0;
+    desc.image_slice_pitch = 0;
+    desc.num_mip_levels = 0;
+    desc.num_samples = 0;
+#ifdef CL_VERSION_2_0
+    desc.mem_object = NULL;
+#else
+    desc.buffer = NULL;
+#endif
+
+    // Create first image based on host memory inputA
+    ocl->srcA = clCreateImage(ocl->context, CL_MEM_READ_ONLY | CL_MEM_USE_HOST_PTR, &format, &desc, inputA, &err);
+    if (CL_SUCCESS != err)
+    {
+        LogError("Error: clCreateImage for srcA returned %s\n", TranslateOpenCLError(err));
+        return err;
+    }
+
+    desc.image_width = nDim;
+    desc.image_height = pDim;
+    // Create second image based on host memory inputB
+    ocl->srcB = clCreateImage(ocl->context, CL_MEM_READ_ONLY | CL_MEM_USE_HOST_PTR, &format, &desc, inputB, &err);
+    if (CL_SUCCESS != err)
+    {
+        LogError("Error: clCreateImage for srcB returned %s\n", TranslateOpenCLError(err));
+        return err;
+    }
+
+    desc.image_width = nDim;
+    desc.image_height = mDim;
+    // Create third (output) image based on host memory outputC
+    ocl->dstMem = clCreateImage(ocl->context, CL_MEM_WRITE_ONLY | CL_MEM_USE_HOST_PTR, &format, &desc, outputC, &err);
+    if (CL_SUCCESS != err)
+    {
+        LogError("Error: clCreateImage for dstMem returned %s\n", TranslateOpenCLError(err));
+        return err;
+    }
+
+
+    return CL_SUCCESS;
+}
 
 /*
  * Set kernel arguments
  */
-cl_uint SetKernelArguments(ocl_args_d_t *ocl)
+cl_uint setKernelArguments(ocl_args_d_t* ocl)
+{
+    cl_int err = CL_SUCCESS;
+
+    err = clSetKernelArg(ocl->kernel, 0, sizeof(cl_mem), (void*)&ocl->srcA);
+    if (CL_SUCCESS != err)
+    {
+        LogError("error: Failed to set argument srcA, returned %s\n", TranslateOpenCLError(err));
+        return err;
+    }
+
+    err = clSetKernelArg(ocl->kernel, 1, sizeof(cl_mem), (void*)&ocl->srcB);
+    if (CL_SUCCESS != err)
+    {
+        LogError("Error: Failed to set argument srcB, returned %s\n", TranslateOpenCLError(err));
+        return err;
+    }
+
+    err = clSetKernelArg(ocl->kernel, 2, sizeof(cl_mem), (void*)&ocl->dstMem);
+    if (CL_SUCCESS != err)
+    {
+        LogError("Error: Failed to set argument dstMem, returned %s\n", TranslateOpenCLError(err));
+        return err;
+    }
+
+
+    return err;
+}
+
+/*
+ * Set kernel arguments
+ */
+cl_uint mSetKernelArguments(ocl_args_d_t *ocl, cl_uint mDim, cl_uint pDim, cl_uint nDim)
 {
     cl_int err = CL_SUCCESS;
 
@@ -783,6 +880,27 @@ cl_uint SetKernelArguments(ocl_args_d_t *ocl)
         return err;
     }
 
+    err = clSetKernelArg(ocl->kernel, 3, sizeof(int), &mDim);
+    if (CL_SUCCESS != err)
+    {
+        LogError("Error: Failed to set argument dstMem, returned %s\n", TranslateOpenCLError(err));
+        return err;
+    }
+
+    err = clSetKernelArg(ocl->kernel, 4, sizeof(int), &pDim);
+    if (CL_SUCCESS != err)
+    {
+        LogError("Error: Failed to set argument dstMem, returned %s\n", TranslateOpenCLError(err));
+        return err;
+    }
+
+    err = clSetKernelArg(ocl->kernel, 5, sizeof(int), &nDim);
+    if (CL_SUCCESS != err)
+    {
+        LogError("Error: Failed to set argument dstMem, returned %s\n", TranslateOpenCLError(err));
+        return err;
+    }
+
     return err;
 }
 
@@ -796,6 +914,33 @@ cl_uint ExecuteAddKernel(ocl_args_d_t *ocl, cl_uint width, cl_uint height)
 
     // Define global iteration space for clEnqueueNDRangeKernel.
     size_t globalWorkSize[2] = {width, height};
+
+
+    // execute kernel
+    err = clEnqueueNDRangeKernel(ocl->commandQueue, ocl->kernel, 2, NULL, globalWorkSize, NULL, 0, NULL, NULL);
+    if (CL_SUCCESS != err)
+    {
+        LogError("Error: Failed to run kernel, return %s\n", TranslateOpenCLError(err));
+        return err;
+    }
+
+    // Wait until the queued kernel is completed by the device
+    err = clFinish(ocl->commandQueue);
+    if (CL_SUCCESS != err)
+    {
+        LogError("Error: clFinish return %s\n", TranslateOpenCLError(err));
+        return err;
+    }
+
+    return CL_SUCCESS;
+}
+
+cl_uint mExecuteMultiplyKernel(ocl_args_d_t* ocl, cl_uint mDim, cl_uint nDim)
+{
+    cl_int err = CL_SUCCESS;
+
+    // Define global iteration space for clEnqueueNDRangeKernel.
+    size_t globalWorkSize[2] = { nDim, mDim };
 
 
     // execute kernel
@@ -869,6 +1014,63 @@ bool ReadAndVerify(ocl_args_d_t *ocl, cl_uint width, cl_uint height, cl_int *inp
     return result;
 }
 
+bool mReadAndVerify(ocl_args_d_t* ocl, cl_int* inputA, cl_int* inputB, cl_uint mDim, cl_uint nDim)
+{
+    cl_int err = CL_SUCCESS;
+    bool result = true;
+
+    // Enqueue a command to map the buffer object (ocl->dstMem) into the host address space and returns a pointer to it
+    // The map operation is blocking
+    size_t origin[] = { 0, 0, 0 };
+    size_t region[] = { nDim, mDim, 1 };
+    size_t image_row_pitch;
+    size_t image_slice_pitch;
+    cl_int* resultPtr = (cl_int*)clEnqueueMapImage(ocl->commandQueue, ocl->dstMem, true, CL_MAP_READ, origin, region, &image_row_pitch, &image_slice_pitch, 0, NULL, NULL, &err);
+
+    if (CL_SUCCESS != err)
+    {
+        LogError("Error: clEnqueueMapBuffer returned %s\n", TranslateOpenCLError(err));
+        return false;
+    }
+
+    // Call clFinish to guarantee that output region is updated
+    err = clFinish(ocl->commandQueue);
+    if (CL_SUCCESS != err)
+    {
+        LogError("Error: clFinish returned %s\n", TranslateOpenCLError(err));
+    }
+
+    // We mapped dstMem to resultPtr, so resultPtr is ready and includes the kernel output !!!
+    // Verify the results
+    /*unsigned int size = width * height;
+    for (unsigned int k = 0; k < size; ++k)
+    {
+        if (resultPtr[k] != inputA[k] * inputB[k])
+        {
+            LogError("Verification failed at %d: (%d + %d = %d)\n", k, inputA[k], inputB[k], resultPtr[k]);
+            result = false;
+        }
+    }*/
+
+    unsigned int size = mDim * nDim;
+    for (unsigned int i = 0; i < size; ++i)
+    {
+        std::cout << resultPtr[i] << " ";
+        if ((i + 1) % nDim== 0) {
+            std::cout << '\n';
+        }
+    }
+
+    // Unmapped the output buffer before releasing it
+    err = clEnqueueUnmapMemObject(ocl->commandQueue, ocl->dstMem, resultPtr, 0, NULL, NULL);
+    if (CL_SUCCESS != err)
+    {
+        LogError("Error: clEnqueueUnmapMemObject returned %s\n", TranslateOpenCLError(err));
+    }
+
+    return result;
+}
+
 
 /*
  * main execution routine
@@ -887,8 +1089,28 @@ int _tmain(int argc, TCHAR* argv[])
     LARGE_INTEGER performanceCountNDRangeStart;
     LARGE_INTEGER performanceCountNDRangeStop;
 
-    cl_uint arrayWidth  = 16;
-    cl_uint arrayHeight = 16;
+    //cl_uint arrayWidth  = 16;
+    //cl_uint arrayHeight = 16;
+
+    cl_uint mDim = 1;
+    cl_uint pDim;
+    cl_uint nDim;
+    cl_int* inputA;
+    cl_int* inputB;
+    cl_int* outputC;
+
+    cl_uint layers = 1;
+    cl_uint listOfDims[5] = { 6, 3 };
+    cl_uint optimizedSizeL = ((sizeof(cl_int*) * layers - 1) / 64 + 1) * 64;
+    inputA = (cl_int*)_aligned_malloc(optimizedSizeL, 4096);
+    cl_uint** layersArray = (cl_int**)_aligned_malloc(optimizedSizeL, 4096);
+
+    for (cl_uint x = 0; x < layers; ++x) {
+        pDim = listOfDims[x];
+        nDim = listOfDims[x + 1];
+        cl_uint optimizedSizeA = ((sizeof(cl_int) * Dim * pDim - 1) / 64 + 1) * 64;
+        inputA = (cl_int*)_aligned_malloc(optimizedSizeA, 4096);
+    }
 
     //initialize Open CL objects (context, queue, etc.)
     if (CL_SUCCESS != SetupOpenCL(&ocl, deviceType))
@@ -896,101 +1118,111 @@ int _tmain(int argc, TCHAR* argv[])
         return -1;
     }
 
-    // allocate working buffers. 
-    // the buffer should be aligned with 4K page and size should fit 64-byte cached line
-    cl_uint optimizedSize = ((sizeof(cl_int) * arrayWidth * arrayHeight - 1)/64 + 1) * 64;
-    cl_int* inputA  = (cl_int*)_aligned_malloc(optimizedSize, 4096);
-    cl_int* inputB  = (cl_int*)_aligned_malloc(optimizedSize, 4096);
-    cl_int* outputC = (cl_int*)_aligned_malloc(optimizedSize, 4096);
-    if (NULL == inputA || NULL == inputB || NULL == outputC)
-    {
-        LogError("Error: _aligned_malloc failed to allocate buffers.\n");
-        return -1;
+
+    for (cl_uint x = 0; x < layers; ++x) {
+
+        pDim = listOfDims[x];
+        nDim = listOfDims[x + 1];
+
+        // allocate working buffers. 
+        // the buffer should be aligned with 4K page and size should fit 64-byte cached line
+        cl_uint optimizedSizeA = ((sizeof(cl_int) * mDim * pDim - 1) / 64 + 1) * 64;
+        inputA = (cl_int*)_aligned_malloc(optimizedSizeA, 4096);
+        cl_uint optimizedSizeB = ((sizeof(cl_int) * pDim * nDim - 1) / 64 + 1) * 64;
+        inputB = (cl_int*)_aligned_malloc(optimizedSizeB, 4096);
+        cl_uint optimizedSizeC = ((sizeof(cl_int) * mDim * nDim - 1) / 64 + 1) * 64;
+        outputC = (cl_int*)_aligned_malloc(optimizedSizeC, 4096);
+        if (NULL == inputA || NULL == inputB || NULL == outputC)
+        {
+            LogError("Error: _aligned_malloc failed to allocate buffers.\n");
+            return -1;
+        }
+
+
+        //random input
+        mGenerateMatrices(inputA, mDim, pDim);
+        mGenerateMatrices(inputB, pDim, nDim);
+
+        // Create OpenCL buffers from host memory
+        // These buffers will be used later by the OpenCL kernel
+        if (CL_SUCCESS != mCreateBufferArguments(&ocl, inputA, inputB, outputC, mDim, pDim, nDim))
+        {
+            return -1;
+        }
+
+        // Create and build the OpenCL program
+        if (CL_SUCCESS != CreateAndBuildProgram(&ocl))
+        {
+            return -1;
+        }
+
+        // Program consists of kernels.
+        // Each kernel can be called (enqueued) from the host part of OpenCL application.
+        // To call the kernel, you need to create it from existing program.
+        ocl.kernel = clCreateKernel(ocl.program, "Multiply_2", &err);
+        if (CL_SUCCESS != err)
+        {
+            LogError("Error: clCreateKernel returned %s\n", TranslateOpenCLError(err));
+            return -1;
+        }
+
+        // Passing arguments into OpenCL kernel.
+        if (CL_SUCCESS != mSetKernelArguments(&ocl, mDim, pDim, nDim))
+        {
+            return -1;
+        }
+
+        // Regularly you wish to use OpenCL in your application to achieve greater performance results
+        // that are hard to achieve in other ways.
+        // To understand those performance benefits you may want to measure time your application spent in OpenCL kernel execution.
+        // The recommended way to obtain this time is to measure interval between two moments:
+        //   - just before clEnqueueNDRangeKernel is called, and
+        //   - just after clFinish is called
+        // clFinish is necessary to measure entire time spending in the kernel, measuring just clEnqueueNDRangeKernel is not enough,
+        // because this call doesn't guarantees that kernel is finished.
+        // clEnqueueNDRangeKernel is just enqueue new command in OpenCL command queue and doesn't wait until it ends.
+        // clFinish waits until all commands in command queue are finished, that suits your need to measure time.
+        bool queueProfilingEnable = true;
+        if (queueProfilingEnable)
+            QueryPerformanceCounter(&performanceCountNDRangeStart);
+        // Execute (enqueue) the kernel
+        //if (CL_SUCCESS != ExecuteAddKernel(&ocl, arrayWidth, arrayHeight))
+        if (CL_SUCCESS != mExecuteMultiplyKernel(&ocl,mDim,nDim))
+        {
+            return -1;
+        }
+        if (queueProfilingEnable)
+            QueryPerformanceCounter(&performanceCountNDRangeStop);
+
+        // The last part of this function: getting processed results back.
+        // use map-unmap sequence to update original memory area with output buffer.
+        mReadAndVerify(&ocl, inputA, inputB,mDim,nDim);
+
+        // retrieve performance counter frequency
+        if (queueProfilingEnable)
+        {
+            QueryPerformanceFrequency(&perfFrequency);
+            LogInfo("NDRange performance counter time %f ms.\n",
+                1000.0f * (float)(performanceCountNDRangeStop.QuadPart - performanceCountNDRangeStart.QuadPart) / (float)perfFrequency.QuadPart);
+        }
     }
 
-    //random input
-    generateMatrices(inputA, arrayWidth, arrayHeight);
-    generateMatrices(inputB, arrayWidth, arrayHeight);
-
-    // Create OpenCL buffers from host memory
-    // These buffers will be used later by the OpenCL kernel
-    if (CL_SUCCESS != CreateBufferArguments(&ocl, inputA, inputB, outputC, arrayWidth, arrayHeight))
-    {
-        return -1;
-    }
-
-     // Create and build the OpenCL program
-    if (CL_SUCCESS != CreateAndBuildProgram(&ocl))
-    {
-        return -1;
-    }
-
-    // Program consists of kernels.
-    // Each kernel can be called (enqueued) from the host part of OpenCL application.
-    // To call the kernel, you need to create it from existing program.
-    ocl.kernel = clCreateKernel(ocl.program, "Add", &err);
-    if (CL_SUCCESS != err)
-    {
-        LogError("Error: clCreateKernel returned %s\n", TranslateOpenCLError(err));
-        return -1;
-    }
-
-    // Passing arguments into OpenCL kernel.
-    if (CL_SUCCESS != SetKernelArguments(&ocl))
-    {
-        return -1;
-    }
-
-    // Regularly you wish to use OpenCL in your application to achieve greater performance results
-    // that are hard to achieve in other ways.
-    // To understand those performance benefits you may want to measure time your application spent in OpenCL kernel execution.
-    // The recommended way to obtain this time is to measure interval between two moments:
-    //   - just before clEnqueueNDRangeKernel is called, and
-    //   - just after clFinish is called
-    // clFinish is necessary to measure entire time spending in the kernel, measuring just clEnqueueNDRangeKernel is not enough,
-    // because this call doesn't guarantees that kernel is finished.
-    // clEnqueueNDRangeKernel is just enqueue new command in OpenCL command queue and doesn't wait until it ends.
-    // clFinish waits until all commands in command queue are finished, that suits your need to measure time.
-    bool queueProfilingEnable = true;
-    if (queueProfilingEnable)
-        QueryPerformanceCounter(&performanceCountNDRangeStart);
-    // Execute (enqueue) the kernel
-    if (CL_SUCCESS != ExecuteAddKernel(&ocl, arrayWidth, arrayHeight))
-    {
-        return -1;
-    }
-    if (queueProfilingEnable)
-        QueryPerformanceCounter(&performanceCountNDRangeStop);
-
-    // The last part of this function: getting processed results back.
-    // use map-unmap sequence to update original memory area with output buffer.
-    ReadAndVerify(&ocl, arrayWidth, arrayHeight, inputA, inputB);
-
-    // retrieve performance counter frequency
-    if (queueProfilingEnable)
-    {
-        QueryPerformanceFrequency(&perfFrequency);
-        LogInfo("NDRange performance counter time %f ms.\n",
-            1000.0f*(float)(performanceCountNDRangeStop.QuadPart - performanceCountNDRangeStart.QuadPart) / (float)perfFrequency.QuadPart);
-    }
-    
-
-    cl_uint arrayLength = arrayWidth * arrayHeight;
+    /*cl_uint arrayLength = arrayWidth * arrayHeight;
     for (cl_uint i = 0; i < arrayLength; i++)
     {
         std::cout << outputC[i]<<" ";
         if ((i + 1) % arrayWidth == 0) {
             std::cout << '\n';
         }
-    }
+    }*/
    
 
     _aligned_free(inputA);
     _aligned_free(inputB);
     _aligned_free(outputC);
 
-    cl_platform_id platformId = FindOpenCLPlatform("Intel", deviceType);
-    PrintDeviceIDs(platformId);
+    //cl_platform_id platformId = FindOpenCLPlatform("Intel", deviceType);
+    //PrintDeviceIDs(platformId);
     std::cout << "May god be with you" <<std::endl;
     system("pause");
     return 0;

@@ -33,7 +33,7 @@ __kernel void Add(read_only image2d_t imageA, read_only image2d_t imageB, write_
     write_imageui(imageC, (int2)(x, y), A + B);
 }
 
-__kernel void Multiply_1(const int mDim, const int nDim, const int pDim, 
+/*__kernel void Multiply_1(const int mDim, const int nDim, const int pDim, 
 global float* matrixA, global float* matrixB, global float* matrixC)
 {
     const int rowInd = get_global_id(0);
@@ -44,32 +44,21 @@ global float* matrixA, global float* matrixB, global float* matrixC)
         finalValue+=matrixA[pDim*r+p]*matrixB[nDim*p+c];
     }
     C[r*nDim+c] = finalValue;
-}
+}*/
 
-__kernel void Multiply_2(const int mDim, const int nDim, const int pDim, 
-global float* matrixA, global float* matrixB, global float* matrixC)
+__kernel void Multiply_2(read_only image2d_t matrixA, read_only image2d_t matrixB, write_only image2d_t matrixC,
+const int mDim, const int pDim, const int nDim)
 {
-    const int rowInd = get_global_id(0);
-    const int colInd = get_global_id(1);
-    int finalValue = 0;
-
+    const int x = get_global_id(0); //the row specification
+    const int y = get_global_id(1); //the column specification
+    int A = 0, B = 0, temp = 0;
+    
     for (int p = 0 ; p < pDim ; p++){
-        finalValue+=matrixA[pDim*r+p]*matrixB[nDim*p+c];
+        A = read_imageui(matrixA, sampler, (int2)(p, x)).x;
+        B = read_imageui(matrixB, sampler, (int2)(y, p)).x;
+        temp+=A*B;
     }
-    C[r*nDim+c] = finalValue;
-}
 
-{ \n" \
-" int k,j; \n" \
-" int i = get_global_id(0); \n" \
-" float tmp; \n" \
-" if( (i < Ndim) ) \n" \
-" { \n" \
-" for(j=0;j<Mdim;j++){ \n" \
-" tmp = 0.0; \n" \
-" for(k=0;k<Pdim;k++) \n" \
-" tmp += A[i*Ndim+k] * B[k*Pdim+j]; \n" \
-" C[i*Ndim+j] = tmp; \n" \
-" } \n" \
-" } \n" \
-} 
+
+    write_imageui(matrixC, (int2)(y, x), temp);
+}
