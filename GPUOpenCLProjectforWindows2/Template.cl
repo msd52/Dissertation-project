@@ -53,12 +53,15 @@ const int mDim, const int pDim, const int nDim)
     const int y = get_global_id(1); //the column specification
     int A = 0, B = 0, temp = 0;
     
+    printf("start %d %d \n", x, y);
+
     for (int p = 0 ; p < pDim ; p++){
         A = read_imageui(matrixA, sampler, (int2)(p, x)).x;
         B = read_imageui(matrixB, sampler, (int2)(y, p)).x;
+        printf("id is %d %d, values are %d %d \n ", x, y, A, B );
         temp+=A*B;
     }
-
+    printf("id is %d %d, final value is %d \n \n \n ", x, y, temp);
 
     write_imageui(matrixC, (int2)(y, x), temp);
 }

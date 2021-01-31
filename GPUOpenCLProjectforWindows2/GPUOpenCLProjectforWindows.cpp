@@ -199,7 +199,7 @@ ocl_args_d_t::ocl_args_d_t() :
             LogError("Error: clReleaseProgram returned '%s'.\n", TranslateOpenCLError(err));
         }
     }
-    if (srcA)
+    /*if (srcA)
     {
         err = clReleaseMemObject(srcA);
         if (CL_SUCCESS != err)
@@ -222,7 +222,7 @@ ocl_args_d_t::ocl_args_d_t() :
         {
             LogError("Error: clReleaseMemObject returned '%s'.\n", TranslateOpenCLError(err));
         }
-    }
+    }*/
     if (commandQueue)
     {
         err = clReleaseCommandQueue(commandQueue);
@@ -940,7 +940,7 @@ cl_uint mExecuteMultiplyKernel(ocl_args_d_t* ocl, cl_uint mDim, cl_uint nDim)
     cl_int err = CL_SUCCESS;
 
     // Define global iteration space for clEnqueueNDRangeKernel.
-    size_t globalWorkSize[2] = { nDim, mDim };
+    size_t globalWorkSize[2] = { mDim, nDim };
 
 
     // execute kernel
@@ -1071,6 +1071,86 @@ bool mReadAndVerify(ocl_args_d_t* ocl, cl_int* inputA, cl_int* inputB, cl_uint m
     return result;
 }
 
+bool mPrint(ocl_args_d_t* ocl, cl_uint mDim, cl_uint pDim, cl_uint nDim)
+{
+    std::cout << "\n \n IN MPRINT \n";
+    cl_int err = CL_SUCCESS;
+    bool result = true;
+
+    // Enqueue a command to map the buffer object (ocl->dstMem) into the host address space and returns a pointer to it
+    // The map operation is blocking
+    size_t image_row_pitch;
+    size_t image_slice_pitch;
+    size_t origin[] = { 0, 0, 0 };
+    size_t region1[] = { pDim, mDim, 1 };
+    size_t region2[] = { nDim, pDim, 1 };
+    size_t region3[] = { nDim, mDim, 1 };
+    cl_int* resultPtr1 = (cl_int*)clEnqueueMapImage(ocl->commandQueue, ocl->srcA, true, CL_MAP_READ, origin, region1, &image_row_pitch, &image_slice_pitch, 0, NULL, NULL, &err);
+    cl_int* resultPtr2 = (cl_int*)clEnqueueMapImage(ocl->commandQueue, ocl->srcB, true, CL_MAP_READ, origin, region2, &image_row_pitch, &image_slice_pitch, 0, NULL, NULL, &err);
+    cl_int* resultPtr3 = (cl_int*)clEnqueueMapImage(ocl->commandQueue, ocl->dstMem, true, CL_MAP_READ, origin, region3, &image_row_pitch, &image_slice_pitch, 0, NULL, NULL, &err);
+
+    if (CL_SUCCESS != err)
+    {
+        LogError("Error: clEnqueueMapBuffer returned %s\n", TranslateOpenCLError(err));
+        return false;
+    }
+
+    // Call clFinish to guarantee that output region is updated
+    err = clFinish(ocl->commandQueue);
+    if (CL_SUCCESS != err)
+    {
+        LogError("Error: clFinish returned %s\n", TranslateOpenCLError(err));
+    }
+
+    unsigned int size = mDim * pDim;
+    for (unsigned int i = 0; i < size; ++i)
+    {
+        std::cout << resultPtr1[i] << " ";
+        if ((i + 1) % pDim == 0) {
+            std::cout << '\n';
+        }
+    }
+    std::cout << std::string(10, '\n');
+
+    size = pDim * nDim;
+    for (unsigned int i = 0; i < size; ++i)
+    {
+        std::cout << resultPtr2[i] << " ";
+        if ((i + 1) % nDim == 0) {
+            std::cout << '\n';
+        }
+    }
+    std::cout << std::string(10, '\n');
+
+    size = mDim * nDim;
+    for (unsigned int i = 0; i < size; ++i)
+    {
+        std::cout << resultPtr3[i] << " ";
+        if ((i + 1) % nDim == 0) {
+            std::cout << '\n';
+        }
+    }
+    std::cout << std::string(10, '\n');
+
+    // Unmapped the output buffer before releasing it
+    err = clEnqueueUnmapMemObject(ocl->commandQueue, ocl->srcA, resultPtr1, 0, NULL, NULL);
+    if (CL_SUCCESS != err)
+    {
+        LogError("Error: clEnqueueUnmapMemObject returned %s\n", TranslateOpenCLError(err));
+    }
+    err = clEnqueueUnmapMemObject(ocl->commandQueue, ocl->srcB, resultPtr2, 0, NULL, NULL);
+    if (CL_SUCCESS != err)
+    {
+        LogError("Error: clEnqueueUnmapMemObject returned %s\n", TranslateOpenCLError(err));
+    }
+    err = clEnqueueUnmapMemObject(ocl->commandQueue, ocl->dstMem, resultPtr3, 0, NULL, NULL);
+    if (CL_SUCCESS != err)
+    {
+        LogError("Error: clEnqueueUnmapMemObject returned %s\n", TranslateOpenCLError(err));
+    }
+
+    return result;
+}
 
 /*
  * main execution routine
@@ -1099,31 +1179,124 @@ int _tmain(int argc, TCHAR* argv[])
     cl_int* inputB;
     cl_int* outputC;
 
-    cl_uint layers = 1;
-    cl_uint listOfDims[5] = { 6, 3 };
-    cl_uint optimizedSizeL = ((sizeof(cl_int*) * layers - 1) / 64 + 1) * 64;
-    inputA = (cl_int*)_aligned_malloc(optimizedSizeL, 4096);
-    cl_uint** layersArray = (cl_int**)_aligned_malloc(optimizedSizeL, 4096);
-
-    for (cl_uint x = 0; x < layers; ++x) {
-        pDim = listOfDims[x];
-        nDim = listOfDims[x + 1];
-        cl_uint optimizedSizeA = ((sizeof(cl_int) * Dim * pDim - 1) / 64 + 1) * 64;
-        inputA = (cl_int*)_aligned_malloc(optimizedSizeA, 4096);
-    }
-
     //initialize Open CL objects (context, queue, etc.)
     if (CL_SUCCESS != SetupOpenCL(&ocl, deviceType))
     {
         return -1;
     }
 
+    // Create and build the OpenCL program
+    if (CL_SUCCESS != CreateAndBuildProgram(&ocl))
+    {
+        return -1;
+    }
 
+    cl_image_format format;
+
+    // Define the image data-type and order -
+    // one channel (R) with unit values
+    format.image_channel_data_type = CL_UNSIGNED_INT32;
+    format.image_channel_order = CL_R;
+
+    cl_image_desc desc;
+    desc.image_depth = 0;
+    desc.image_array_size = 1;
+    desc.image_row_pitch = 0;
+    desc.image_slice_pitch = 0;
+    desc.num_mip_levels = 0;
+    desc.num_samples = 0;
+#ifdef CL_VERSION_2_0
+    desc.mem_object = NULL;
+#else
+    desc.buffer = NULL;
+#endif
+    desc.image_type = CL_MEM_OBJECT_IMAGE2D;
+
+
+
+    const cl_uint layers = 2; //We don't count input as a layer
+    cl_uint listOfDims[layers+1] = {2,3,4};
+    
+    //cl_uint optimizedSizeW = ((sizeof(cl_int*) * layers - 1) / 64 + 1) * 64;
+    //cl_int** weightArray = (cl_int**)_aligned_malloc(optimizedSizeW, 4096); //array of arrays where each subarray is the set of weights connecting 2 layers
+    cl_uint optimizedSizeWeightImages = ((sizeof(cl_mem) * layers - 1) / 64 + 1) * 64;
+    cl_mem* imagesWeightArray = (cl_mem*)_aligned_malloc(optimizedSizeWeightImages, 4096); //array of memory objects, where each memory object is an image of weights between layers
+
+    //cl_uint optimizedSizeOut = ((sizeof(cl_int*) * layers - 1) / 64 + 1) * 64; 
+    //cl_int** outArray = (cl_int**)_aligned_malloc(optimizedSizeOut, 4096); //array of outputs for each layer
+    cl_uint optimizedSizeOutImages = ((sizeof(cl_mem) * layers - 1) / 64 + 1) * 64;
+    cl_mem* imagesOutArray = (cl_mem*)_aligned_malloc(optimizedSizeOutImages, 4096); //array of memory objects, where each memory object is an image of outputs of layers
+
+
+
+    cl_uint optimizedSizeIn = ((sizeof(cl_int) * listOfDims[0] - 1) / 64 + 1) * 64;
+    cl_int* inArray = (cl_int*)_aligned_malloc(optimizedSizeIn, 4096); //array of network input
+    mGenerateMatrices(inArray, listOfDims[0], 1);//TODO: have some code here to initiliaze inputArray with external training data
+    
+    desc.image_width = 1;
+    desc.image_height = listOfDims[0];
+    cl_mem imageInArray = clCreateImage(ocl.context, CL_MEM_READ_WRITE | CL_MEM_USE_HOST_PTR, &format, &desc, inArray, &err);
+    if (CL_SUCCESS != err)
+    {
+        LogError("Error: clCreateImage for srcA returned %s\n", TranslateOpenCLError(err));
+        return err;
+    }
+    std::cout << "2nd is" << listOfDims[0] <<"   "<< 1;
+
+    cl_int* tempOutArray, *tempWeightArray;
+    for (cl_uint x = 0; x < layers; ++x) {
+        mDim = listOfDims[x+1];
+        pDim = listOfDims[x];
+        cl_uint optimizedSizeTempOut = ((sizeof(cl_int) * mDim - 1) / 64 + 1) * 64;
+        cl_uint optimizedSizeTempW = ((sizeof(cl_int) * mDim*pDim - 1) / 64 + 1) * 64;
+        tempOutArray = (cl_int*)_aligned_malloc(optimizedSizeTempOut, 4096);
+        tempWeightArray = (cl_int*)_aligned_malloc(optimizedSizeTempW, 4096);
+        mGenerateMatrices(tempWeightArray, mDim, pDim);
+
+        //outArray[x] = (cl_int*)_aligned_malloc(optimizedSizeTempOut, 4096);
+        //weightArray[x] = (cl_int*)_aligned_malloc(optimizedSizeTempW, 4096);
+        //mGenerateMatrices(layersWArray[x], mDim, pDim);
+
+        //(cl_int*)_aligned_malloc(optimizedSizeTempOut, 4096);
+
+        // Define the image properties (descriptor)
+        desc.image_width = pDim;
+        desc.image_height = mDim;
+
+        // Create first image based on host memory inputA
+        imagesWeightArray[x] = clCreateImage(ocl.context, CL_MEM_READ_WRITE | CL_MEM_USE_HOST_PTR, &format, &desc, tempWeightArray, &err);
+        if (CL_SUCCESS != err)
+        {
+            LogError("Error: clCreateImage for srcA returned %s\n", TranslateOpenCLError(err));
+            return err;
+        }
+
+        std::cout << "1st is " << mDim << "   " << pDim;
+
+        desc.image_width = 1;
+        desc.image_height = mDim;
+        imagesOutArray[x] = clCreateImage(ocl.context, CL_MEM_READ_WRITE | CL_MEM_USE_HOST_PTR, &format, &desc, tempOutArray, &err); //I think I needn't use CL_MEM_USE_HOST_PTR
+        if (CL_SUCCESS != err)
+        {
+            LogError("Error: clCreateImage for srcA returned %s\n", TranslateOpenCLError(err));
+            return err;
+        }
+        std::cout << "3rd is " << mDim << "   " << 1;
+    }
+
+
+    ocl.dstMem = imageInArray;
     for (cl_uint x = 0; x < layers; ++x) {
 
+        mDim = listOfDims[x+1];
         pDim = listOfDims[x];
-        nDim = listOfDims[x + 1];
+        nDim = 1;
 
+        ocl.srcA = imagesWeightArray[x];
+        ocl.srcB = ocl.dstMem;
+        ocl.dstMem = imagesOutArray[x];
+
+        /*
         // allocate working buffers. 
         // the buffer should be aligned with 4K page and size should fit 64-byte cached line
         cl_uint optimizedSizeA = ((sizeof(cl_int) * mDim * pDim - 1) / 64 + 1) * 64;
@@ -1148,13 +1321,7 @@ int _tmain(int argc, TCHAR* argv[])
         if (CL_SUCCESS != mCreateBufferArguments(&ocl, inputA, inputB, outputC, mDim, pDim, nDim))
         {
             return -1;
-        }
-
-        // Create and build the OpenCL program
-        if (CL_SUCCESS != CreateAndBuildProgram(&ocl))
-        {
-            return -1;
-        }
+        }*/
 
         // Program consists of kernels.
         // Each kernel can be called (enqueued) from the host part of OpenCL application.
@@ -1196,7 +1363,8 @@ int _tmain(int argc, TCHAR* argv[])
 
         // The last part of this function: getting processed results back.
         // use map-unmap sequence to update original memory area with output buffer.
-        mReadAndVerify(&ocl, inputA, inputB,mDim,nDim);
+        //mReadAndVerify(&ocl, inputA, inputB,mDim,nDim);
+        mPrint(&ocl, mDim, pDim, nDim);
 
         // retrieve performance counter frequency
         if (queueProfilingEnable)
@@ -1217,9 +1385,18 @@ int _tmain(int argc, TCHAR* argv[])
     }*/
    
 
-    _aligned_free(inputA);
-    _aligned_free(inputB);
-    _aligned_free(outputC);
+    //Deallocate memory
+    for (cl_uint x = 0; x < layers; ++x) {
+        std::cout << "releasing obj num" << x;
+        clReleaseMemObject(imagesOutArray[x]);
+        clReleaseMemObject(imagesWeightArray[x]);
+    }
+    _aligned_free(imagesOutArray);
+    _aligned_free(imagesWeightArray);
+    clReleaseMemObject(imageInArray);
+    //_aligned_free(inputA);
+    //_aligned_free(inputB);
+    //_aligned_free(outputC);
 
     //cl_platform_id platformId = FindOpenCLPlatform("Intel", deviceType);
     //PrintDeviceIDs(platformId);
