@@ -47,7 +47,7 @@ global float* matrixA, global float* matrixB, global float* matrixC)
 }*/
 
 __kernel void Multiply_2(read_only image2d_t matrixA, read_only image2d_t matrixB, write_only image2d_t matrixC,
-const int mDim, const int pDim, const int nDim)
+const int pDim)
 {
     const int x = get_global_id(0); //the row specification
     const int y = get_global_id(1); //the column specification
@@ -64,4 +64,27 @@ const int mDim, const int pDim, const int nDim)
     printf("id is %d %d, final value is %d \n \n \n ", x, y, temp);
 
     write_imageui(matrixC, (int2)(y, x), temp);
+}
+
+//New refers to most recent layer and old refers to second most recent layer (all while traversing the network backwards)
+//So the weightMatrix has dimensions lOldxlNew. We have to compute lNew many deltas, so there are lNew many work items globally
+__kernel void Multiply_Deltas(read_only image2d_t weightsMatrix, read_only image2d_t deltasMatrixOld, write_only image2d_t deltasMatrixNew,
+const int lOld)
+{
+    printf("In MultiplyDeltas");
+    const int x = get_global_id(0); //the row specification, from 0 to lNew-1
+    const int y = get_global_id(1);
+    int A = 0, B = 0, temp = 0;
+    
+    printf("start %d %d \n", x, y);
+
+    for (int p = 0 ; p < lOld ; p++){
+        A = read_imageui(weightsMatrix, sampler, (int2)(x, p)).x;
+        B = read_imageui(deltasMatrixOld, sampler, (int2)(y, p)).x;
+        printf("id is %d %d, values are %d %d \n ", x, y, A, B );
+        temp+=A*B;
+    }
+    printf("id is %d %d, final value is %d \n \n \n ", x, y, temp);
+
+    write_imageui(deltasMatrixNew, (int2)(y,x), temp);
 }
