@@ -33,18 +33,21 @@ __kernel void Add(read_only image2d_t imageA, read_only image2d_t imageB, write_
     write_imageui(imageC, (int2)(x, y), A + B);
 }
 
-/*__kernel void Multiply_1(const int mDim, const int nDim, const int pDim, 
-global float* matrixA, global float* matrixB, global float* matrixC)
+__kernel void Multiply_Buffer(global int* matrixA, global int* matrixB, global int* matrixC,
+const int pDim, const int mDim, const int nDim)
 {
-    const int rowInd = get_global_id(0);
-    const int colInd = get_global_id(1);
+    const int r = get_global_id(0);
+    const int c = get_global_id(1);
     int finalValue = 0;
+        printf("start %d %d \n", r, c);
 
     for (int p = 0 ; p < pDim ; p++){
         finalValue+=matrixA[pDim*r+p]*matrixB[nDim*p+c];
+         printf("id is %d %d, values are %d %d \n ", r, c, matrixA[pDim*r+p], matrixB[nDim*p+c] );
     }
-    C[r*nDim+c] = finalValue;
-}*/
+    matrixC[r*nDim+c] = finalValue;
+    printf("id is %d %d, final value is %d \n \n \n ", r, c, finalValue);
+}
 
 __kernel void Multiply_2(read_only image2d_t matrixA, read_only image2d_t matrixB, write_only image2d_t matrixC,
 const int pDim)
@@ -87,4 +90,24 @@ const int lOld)
     printf("id is %d %d, final value is %d \n \n \n ", x, y, temp);
 
     write_imageui(deltasMatrixNew, (int2)(y,x), temp);
+}
+
+__kernel void Update_Weights(read_only image2d_t deltasMatrix, read_only image2d_t outputsMatrix, global float* plss)
+{
+    printf("In Update_Weights");
+    const int x = get_global_id(0);
+    const int y = get_global_id(1);
+    int A = 0, B = 0;
+    
+    printf("start %d %d \n", x, y);
+
+    A = read_imageui(deltasMatrix, sampler, (int2)(0, x)).x;
+    B = read_imageui(outputsMatrix, sampler, (int2)(0, y)).x;
+    printf("id is %d %d, values are %d %d \n ", x, y, A, B );
+    int temp=A*B;
+
+    printf("id is %d %d, final value is %d \n \n \n ", x, y, temp);
+
+
+    //write_imageui(weightsMatrix, (int2)(y,x), temp);
 }

@@ -881,11 +881,13 @@ cl_uint mSetKernelArguments(ocl_args_d_t *ocl, cl_uint pDim)
         return err;
     }
 
-    err = clSetKernelArg(ocl->kernel, 3, sizeof(int), &pDim);
-    if (CL_SUCCESS != err)
-    {
-        LogError("Error: Failed to set argument dstMem, returned %s\n", TranslateOpenCLError(err));
-        return err;
+    if (pDim !=0) {
+        err = clSetKernelArg(ocl->kernel, 3, sizeof(int), &pDim);
+        if (CL_SUCCESS != err)
+        {
+            LogError("Error: Failed to set argument dstMem, returned %s\n", TranslateOpenCLError(err));
+            return err;
+        }
     }
 
     return err;
@@ -1065,7 +1067,7 @@ cl_int MSECostFunction(cl_int correctOutput, cl_int networkOutput) {
     return pow(networkOutput - correctOutput, 2) / 2;
 }
 
-bool mPrint(ocl_args_d_t* ocl, cl_uint mDim, cl_uint pDim, cl_uint nDim, cl_bool multiplyKernel)
+bool mPrint(ocl_args_d_t* ocl, cl_uint mDim, cl_uint pDim, cl_uint nDim, cl_int whichKernel)
 {
     std::cout << "\n \n IN MPRINT \n";
     cl_int err = CL_SUCCESS;
@@ -1078,16 +1080,26 @@ bool mPrint(ocl_args_d_t* ocl, cl_uint mDim, cl_uint pDim, cl_uint nDim, cl_bool
     size_t origin[] = { 0, 0, 0 };
     size_t region1a[] = { pDim, mDim, 1 };
     size_t region1b[] = { mDim, pDim, 1 };
+    size_t region2a[] = { nDim, pDim, 1 };
+    size_t region2b[] = { pDim, nDim, 1 };
+    size_t region3[] = { nDim, mDim, 1 };
     cl_int* resultPtr1;
-    if (multiplyKernel == true) { //we are doing normal matrix multiplication
-        resultPtr1 = (cl_int*)clEnqueueMapImage(ocl->commandQueue, ocl->srcA, true, CL_MAP_READ, origin, region1a, &image_row_pitch, &image_slice_pitch, 0, NULL, NULL, &err);
-    }
-    else {//we are doing delta calculation
+    cl_int* resultPtr2;
+    if (whichKernel == 2){//kernel is deltas calculation
         resultPtr1 = (cl_int*)clEnqueueMapImage(ocl->commandQueue, ocl->srcA, true, CL_MAP_READ, origin, region1b, &image_row_pitch, &image_slice_pitch, 0, NULL, NULL, &err);
     }
-    size_t region2[] = { nDim, pDim, 1 };
-    size_t region3[] = { nDim, mDim, 1 };
-    cl_int* resultPtr2 = (cl_int*)clEnqueueMapImage(ocl->commandQueue, ocl->srcB, true, CL_MAP_READ, origin, region2, &image_row_pitch, &image_slice_pitch, 0, NULL, NULL, &err);
+    else{
+        resultPtr1 = (cl_int*)clEnqueueMapImage(ocl->commandQueue, ocl->srcA, true, CL_MAP_READ, origin, region1a, &image_row_pitch, &image_slice_pitch, 0, NULL, NULL, &err);
+    }
+
+    if (whichKernel == 3) { //kernel is weight updates
+        resultPtr2 = (cl_int*)clEnqueueMapImage(ocl->commandQueue, ocl->srcB, true, CL_MAP_READ, origin, region2b, &image_row_pitch, &image_slice_pitch, 0, NULL, NULL, &err);
+    }
+    else{
+        resultPtr2 = (cl_int*)clEnqueueMapImage(ocl->commandQueue, ocl->srcB, true, CL_MAP_READ, origin, region2a, &image_row_pitch, &image_slice_pitch, 0, NULL, NULL, &err);
+    }
+
+
     size_t temp;
     err = clGetImageInfo(ocl->dstMem, CL_IMAGE_WIDTH, sizeof(size_t),&temp,NULL);
     std::cout << "last pointer has width: " << temp << '\n';
@@ -1228,6 +1240,8 @@ int _tmain(int argc, TCHAR* argv[])
     cl_uint optimizedSize = ((sizeof(cl_mem) * layers - 1) / 64 + 1) * 64;
     cl_mem* imagesWeightsArray = (cl_mem*)_aligned_malloc(optimizedSize, 4096); //array of memory objects, where each memory object is an image of weights between layers
 
+    cl_mem* imagesWeightsAuxArray = (cl_mem*)_aligned_malloc(optimizedSize, 4096); //array of memory objects, where each memory object is an image of weights between layers
+
     cl_mem* imagesOutsArray = (cl_mem*)_aligned_malloc(optimizedSize, 4096); //array of memory objects, where each memory object is an image of outputs of layers
 
     cl_mem* imagesDeltasArray = (cl_mem*)_aligned_malloc(optimizedSize, 4096); //array of memory objects, where each memory object is an image of deltas of layers
@@ -1295,7 +1309,119 @@ int _tmain(int argc, TCHAR* argv[])
         }
     }
 
+    
+    int layers2 = 1;
+    ocl.dstMem = imageInArray;
 
+
+    std::cout << "WHAT WE CARE FOR---------------------------------- \n";
+    int m = 5;
+    int p = 4;
+    int n = 1;
+    
+    cl_uint sizetemp = ((sizeof(cl_int) * m*p - 1) / 64 + 1) * 64;
+    cl_int* srcAmem = (cl_int*)_aligned_malloc(sizetemp, 4096);
+    cl_int* srcAmem2 = (cl_int*)_aligned_malloc(sizetemp, 4096); 
+    sizetemp = ((sizeof(cl_int) * n*p - 1) / 64 + 1) * 64;
+    cl_int* srcBmem = (cl_int*)_aligned_malloc(sizetemp, 4096); 
+    cl_int* srcBmem2 = (cl_int*)_aligned_malloc(sizetemp, 4096);
+    sizetemp = ((sizeof(cl_int) * m * n - 1) / 64 + 1) * 64;
+    cl_int* dstMemmem = (cl_int*)_aligned_malloc(sizetemp, 4096);
+    cl_int* dstMemmem2 = (cl_int*)_aligned_malloc(sizetemp, 4096);
+    mGenerateMatrices(srcAmem, m, p);
+    mGenerateMatrices(srcBmem, p, n);
+    ocl.srcA = clCreateBuffer(ocl.context, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR, sizeof(cl_int)*m*p,srcAmem,&err);
+    ocl.srcB = clCreateBuffer(ocl.context, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR, sizeof(cl_int) * n * p, srcBmem, &err);
+    ocl.dstMem = clCreateBuffer(ocl.context, CL_MEM_READ_WRITE | CL_MEM_USE_HOST_PTR, sizeof(cl_int) * m * n,dstMemmem, &err);
+
+
+        // Program consists of kernels.
+        // Each kernel can be called (enqueued) from the host part of OpenCL application.
+        // To call the kernel, you need to create it from existing program.
+        ocl.kernel = clCreateKernel(ocl.program, "Multiply_Buffer", &err);
+        if (CL_SUCCESS != err)
+        {
+            LogError("Error: clCreateKernel returned %s\n", TranslateOpenCLError(err));
+            return -1;
+        }
+
+        // Passing arguments into OpenCL kernel.
+        if (CL_SUCCESS != mSetKernelArguments(&ocl, p))
+        {
+            return -1;
+        }
+        err = clSetKernelArg(ocl.kernel, 4, sizeof(int), &m);
+        if (CL_SUCCESS != err)
+        {
+            LogError("Error: Failed to set argument dstMem, returned %s\n", TranslateOpenCLError(err));
+            return err;
+        }
+        err = clSetKernelArg(ocl.kernel, 5, sizeof(int), &n);
+        if (CL_SUCCESS != err)
+        {
+            LogError("Error: Failed to set argument dstMem, returned %s\n", TranslateOpenCLError(err));
+            return err;
+        }
+
+        // Execute (enqueue) the kernel
+        if (CL_SUCCESS != mExecuteMultiplyKernel(&ocl,m,n))
+        {
+            return -1;
+        }
+
+        // The last part of this function: getting processed results back.
+        // use map-unmap sequence to update original memory area with output buffer.
+        //mReadAndVerify(&ocl, inputA, inputB,mDim,nDim);
+        //mPrint(&ocl, m, p, n, 1);
+    
+        clEnqueueReadBuffer(ocl.commandQueue, ocl.srcA, true, 0,sizeof(cl_int)* m * p, (void*)srcAmem2, 0, NULL, NULL);
+        err = clFinish(ocl.commandQueue);
+        int size = m*p;
+        std::cout << "Printing the read buffers \n";
+        for (unsigned int i = 0; i < size; ++i)
+        {
+            std::cout << srcAmem2[i] << " ";
+            if ((i + 1) % p == 0) {
+                std::cout << '\n';
+            }
+        }
+        std::cout << std::string(10, '\n');
+        clEnqueueReadBuffer(ocl.commandQueue, ocl.srcB, true, 0, sizeof(cl_int)*p*n, (void*)srcBmem2, 0, NULL, NULL);
+        err = clFinish(ocl.commandQueue);
+        size = p*n;
+        for (unsigned int i = 0; i < size; ++i)
+        {
+            std::cout << srcBmem2[i] << " ";
+            if ((i + 1) % n == 0) {
+                std::cout << '\n';
+            }
+        }
+        std::cout << std::string(10, '\n');
+        clEnqueueReadBuffer(ocl.commandQueue, ocl.dstMem, true, 0, sizeof(cl_int)*m* n, (void*)dstMemmem2, 0, NULL, NULL);
+        err = clFinish(ocl.commandQueue);
+        size = m * n;
+        for (unsigned int i = 0; i < size; ++i)
+        {
+            std::cout << dstMemmem2[i] << " ";
+            if ((i + 1) % n == 0) {
+                std::cout << '\n';
+            }
+        }
+        std::cout << std::string(10, '\n');
+        std::cout << "Done printing the read buffers \n";
+        clReleaseMemObject(ocl.srcA);
+        clReleaseMemObject(ocl.srcB);
+        clReleaseMemObject(ocl.dstMem);
+        _aligned_free(srcAmem);
+        _aligned_free(srcBmem);
+        _aligned_free(dstMemmem);
+        _aligned_free(srcAmem2);
+        _aligned_free(srcBmem2);
+        _aligned_free(dstMemmem2);
+
+
+
+    /*
     ocl.dstMem = imageInArray;
     for (cl_uint x = 0; x < layers; ++x) {
 
@@ -1337,7 +1463,7 @@ int _tmain(int argc, TCHAR* argv[])
         // The last part of this function: getting processed results back.
         // use map-unmap sequence to update original memory area with output buffer.
         //mReadAndVerify(&ocl, inputA, inputB,mDim,nDim);
-        mPrint(&ocl, mDim, pDim, nDim, true);
+        mPrint(&ocl, mDim, pDim, nDim, 1);
 
         // retrieve performance counter frequency
         if (queueProfilingEnable)
@@ -1391,7 +1517,6 @@ int _tmain(int argc, TCHAR* argv[])
         ocl.srcB = ocl.dstMem;
         ocl.dstMem = imagesDeltasArray[x - 1];
 
-
         // Program consists of kernels.
         // Each kernel can be called (enqueued) from the host part of OpenCL application.
         // To call the kernel, you need to create it from existing program.
@@ -1419,19 +1544,52 @@ int _tmain(int argc, TCHAR* argv[])
         if (queueProfilingEnable)
             QueryPerformanceCounter(&performanceCountNDRangeStop);
         std::cout << "Outputing delta from layer " << x << '\n';
-        mPrint(&ocl, mDim, pDim, nDim, false);
+        mPrint(&ocl, mDim, pDim, nDim, 2);
     }
     
     //perform weight updates now. We can potentially parallelize this fully even across all network layers
     //but for now it's only across the weights of each layer and then sequentially across layers
-    /*ocl.srcA =
 
-    for (cl_uint x = layers - 1; x > 0; --x) {
-        ocl.srcA = imagesWeightsArray[x]
-        ocl.srcB =
-        ocl.dstMem =
+    for (cl_uint x = layers - 1; x >= 0; --x) {
+        mDim = listOfDims[x + 1];
+        nDim = listOfDims[x];
+        ocl.srcA = imagesDeltasArray[x];
+        ocl.dstMem = imagesWeightsArray[x];
+        if (x != 0) {
+            ocl.srcB = imagesOutsArray[x - 1];
+        }
+        else {
+            ocl.srcB = imageInArray;
+        }
 
-    }*/
+        ocl.kernel = clCreateKernel(ocl.program, "Update_Weights", &err);
+        if (CL_SUCCESS != err)
+        {
+            LogError("Error: clCreateKernel returned %s\n", TranslateOpenCLError(err));
+            return -1;
+        }
+
+        if (CL_SUCCESS != mSetKernelArguments(&ocl, 0))
+        {
+            return -1;
+        }
+
+        bool queueProfilingEnable = true;
+        if (queueProfilingEnable)
+            QueryPerformanceCounter(&performanceCountNDRangeStart);
+        // Execute (enqueue) the kernel
+
+        if (CL_SUCCESS != mExecuteMultiplyKernel(&ocl, mDim, nDim)) //thankfully, the same function works for our Multiply_Deltas kernel too
+        {
+            return -1;
+        }
+        if (queueProfilingEnable)
+            QueryPerformanceCounter(&performanceCountNDRangeStop);
+        std::cout << "Outputing delta from layer " << x << '\n';
+        mPrint(&ocl, mDim, 1, nDim, 3);
+    }
+    */
+
    
 
     //Deallocate dynamic memory and release memory objects
