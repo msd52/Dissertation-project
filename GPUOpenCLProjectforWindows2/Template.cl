@@ -34,7 +34,7 @@ __kernel void Add(read_only image2d_t imageA, read_only image2d_t imageB, write_
 }
 
 __kernel void Multiply_Buffer(global int* matrixA, global int* matrixB, global int* matrixC,
-const int pDim, const int mDim, const int nDim)
+const int mDim, const int pDim, const int nDim)
 {
     const int r = get_global_id(0);
     const int c = get_global_id(1);
@@ -49,7 +49,7 @@ const int pDim, const int mDim, const int nDim)
     printf("id is %d %d, final value is %d \n \n \n ", r, c, finalValue);
 }
 
-__kernel void Multiply_2(read_only image2d_t matrixA, read_only image2d_t matrixB, write_only image2d_t matrixC,
+__kernel void Multiply_Image(read_only image2d_t matrixA, read_only image2d_t matrixB, write_only image2d_t matrixC,
 const int pDim)
 {
     const int x = get_global_id(0); //the row specification
@@ -71,10 +71,33 @@ const int pDim)
 
 //New refers to most recent layer and old refers to second most recent layer (all while traversing the network backwards)
 //So the weightMatrix has dimensions lOldxlNew. We have to compute lNew many deltas, so there are lNew many work items globally
-__kernel void Multiply_Deltas(read_only image2d_t weightsMatrix, read_only image2d_t deltasMatrixOld, write_only image2d_t deltasMatrixNew,
+__kernel void Multiply_Deltas_Buffers(global int* weightsMatrix, global int* deltasMatrixOld, global int* deltasMatrixNew,
+const int lNew, const int lOld)
+{
+    printf("In Multiply_Deltas_Buffers");
+    const int x = get_global_id(0); //the row specification, from 0 to lNew-1
+    const int y = 0;
+    int A = 0, B = 0, temp = 0;
+    
+    printf("start %d %d \n", x, y);
+
+    for (int p = 0 ; p < lOld ; p++){
+        A = weightsMatrix[p*lNew+x];//read_imageui(weightsMatrix, sampler, (int2)(x, p)).x;
+        B = deltasMatrixOld[p];//read_imageui(deltasMatrixOld, sampler, (int2)(y, p)).x;
+        printf("id is %d %d, values are %d %d \n ", x, y, A, B );
+        temp+=A*B;
+    }
+    printf("id is %d %d, final value is %d \n \n \n ", x, y, temp);
+
+    deltasMatrixNew[x] = temp;//write_imageui(deltasMatrixNew, (int2)(y,x), temp);
+}
+
+//New refers to most recent layer and old refers to second most recent layer (all while traversing the network backwards)
+//So the weightMatrix has dimensions lOldxlNew. We have to compute lNew many deltas, so there are lNew many work items globally
+__kernel void Multiply_Deltas_Images(read_only image2d_t weightsMatrix, read_only image2d_t deltasMatrixOld, write_only image2d_t deltasMatrixNew,
 const int lOld)
 {
-    printf("In MultiplyDeltas");
+    printf("In Multiply_Deltas_Images");
     const int x = get_global_id(0); //the row specification, from 0 to lNew-1
     const int y = get_global_id(1);
     int A = 0, B = 0, temp = 0;
@@ -92,7 +115,26 @@ const int lOld)
     write_imageui(deltasMatrixNew, (int2)(y,x), temp);
 }
 
-__kernel void Update_Weights(read_only image2d_t deltasMatrix, read_only image2d_t outputsMatrix, global float* plss)
+__kernel void Update_Weights_Buffers(global int* deltasMatrix,global int* outputsMatrix,global int* weightsMatrix
+,const int deltasDim, const int outputsDim, const int learning_rate)
+{
+    printf("Update_Weights_Buffers");
+    const int x = get_global_id(0); //the row specification, from 0 to deltasDim-1
+    const int y = get_global_id(1); //the column specification, from 0 to outputsDim-1
+    
+    printf("start %d %d \n", x, y);
+    
+    const int A = deltasMatrix[x];
+    const int B = outputsMatrix[y];
+    printf("id is %d %d, values are %d %d \n ", x, y, A, B );
+    const int temp=A*B;
+    printf("id is %d %d, temp value is %d \n \n \n ", x, y, temp);
+
+    weightsMatrix[x*outputsDim + y] = weightsMatrix[x*outputsDim + y] - learning_rate * temp;
+    printf("id is %d %d, final value is %d \n \n \n ", x, y, weightsMatrix[x*outputsDim+y]);
+}
+
+/*__kernel void Update_Weights(read_only image2d_t deltasMatrix, read_only image2d_t outputsMatrix, global float* plss)
 {
     printf("In Update_Weights");
     const int x = get_global_id(0);
@@ -110,4 +152,4 @@ __kernel void Update_Weights(read_only image2d_t deltasMatrix, read_only image2d
 
 
     //write_imageui(weightsMatrix, (int2)(y,x), temp);
-}
+}*/
