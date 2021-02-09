@@ -33,22 +33,6 @@ __kernel void Add(read_only image2d_t imageA, read_only image2d_t imageB, write_
     write_imageui(imageC, (int2)(x, y), A + B);
 }
 
-__kernel void Multiply_Buffer(global float* matrixA, global float* matrixB, global float* matrixC,
-const int mDim, const int pDim, const int nDim)
-{
-    const int r = get_global_id(0);
-    const int c = get_global_id(1);
-    float finalValue = 0;
-    printf("start %d %d \n", r, c);
-    printf("pls be right %d %d should be %f %f and ndim is %d\n", r, c, matrixB[0], matrixB[1], nDim);
-    for (int p = 0 ; p < pDim ; p++){
-        finalValue+=matrixA[pDim*r+p]*matrixB[nDim*p+c];
-        printf("id is %d %d, values are %f %f \n ", r, c, matrixA[pDim*r+p], matrixB[nDim*p+c] );
-    }
-    matrixC[r*nDim+c] = finalValue;
-    printf("id is %d %d, final value is %f \n \n \n ", r, c, finalValue);
-}
-
 __kernel void Multiply_Image(read_only image2d_t matrixA, read_only image2d_t matrixB, write_only image2d_t matrixC,
 const int pDim)
 {
@@ -69,12 +53,80 @@ const int pDim)
     write_imageui(matrixC, (int2)(y, x), temp);
 }
 
+__kernel void Multiply_Buffer_Identity(global float* matrixA, global float* matrixB, global float* matrixC,
+const int mDim, const int pDim, const int nDim)
+{
+    const int r = get_global_id(0);
+    const int c = get_global_id(1);
+    float finalValue = 0.0;
+    printf("start %d %d \n", r, c);
+    printf("pls be right %d %d should be %f %f and ndim is %d\n", r, c, matrixB[0], matrixB[1], nDim);
+    for (int p = 0 ; p < pDim ; p++){
+        finalValue+=matrixA[pDim*r+p]*matrixB[nDim*p+c];
+        printf("id is %d %d, values are %f %f \n ", r, c, matrixA[pDim*r+p], matrixB[nDim*p+c] );
+    }
+    matrixC[r*nDim+c] = finalValue;
+    printf("id is %d %d, final value is %f \n \n \n ", r, c, finalValue);
+    printf("id is %d %d, post function appied is %f \n \n \n ", r, c, finalValue);
+}
+
+__kernel void Multiply_Buffer_Sigmoid(global float* matrixA, global float* matrixB, global float* matrixC,
+const int mDim, const int pDim, const int nDim)
+{
+    const int r = get_global_id(0);
+    const int c = get_global_id(1);
+    float finalValue = 0.0;
+    printf("start %d %d \n", r, c);
+    printf("pls be right %d %d should be %f %f and ndim is %d\n", r, c, matrixB[0], matrixB[1], nDim);
+    for (int p = 0 ; p < pDim ; p++){
+        finalValue+=matrixA[pDim*r+p]*matrixB[nDim*p+c];
+        printf("id is %d %d, values are %f %f \n ", r, c, matrixA[pDim*r+p], matrixB[nDim*p+c] );
+    }
+    matrixC[r*nDim+c] = 1.0 / (1.0 + exp(-finalValue));
+    printf("id is %d %d, final value is %f \n \n \n ", r, c, finalValue);
+    printf("id is %d %d, post function applied is %f \n \n \n ", r, c, matrixC[r*nDim+c]);
+}
+
+__kernel void Multiply_Buffer_Tanh(global float* matrixA, global float* matrixB, global float* matrixC,
+const int mDim, const int pDim, const int nDim)
+{
+    const int r = get_global_id(0);
+    const int c = get_global_id(1);
+    float finalValue = 0.0;
+    printf("start %d %d \n", r, c);
+    printf("pls be right %d %d should be %f %f and ndim is %d\n", r, c, matrixB[0], matrixB[1], nDim);
+    for (int p = 0 ; p < pDim ; p++){
+        finalValue+=matrixA[pDim*r+p]*matrixB[nDim*p+c];
+        printf("id is %d %d, values are %f %f \n ", r, c, matrixA[pDim*r+p], matrixB[nDim*p+c] );
+    }
+    matrixC[r*nDim+c] = tanh(finalValue);
+    printf("id is %d %d, final value is %f \n \n \n ", r, c, finalValue);
+    printf("id is %d %d, post function applied is %f \n \n \n ", r, c, matrixC[r*nDim+c]);
+}
+
+__kernel void Multiply_Buffer_ReLU(global float* matrixA, global float* matrixB, global float* matrixC,
+const int mDim, const int pDim, const int nDim)
+{
+    const int r = get_global_id(0);
+    const int c = get_global_id(1);
+    float finalValue = 0.0;
+    printf("start %d %d \n", r, c);
+    printf("pls be right %d %d should be %f %f and ndim is %d\n", r, c, matrixB[0], matrixB[1], nDim);
+    for (int p = 0 ; p < pDim ; p++){
+        finalValue+=matrixA[pDim*r+p]*matrixB[nDim*p+c];
+        printf("id is %d %d, values are %f %f \n ", r, c, matrixA[pDim*r+p], matrixB[nDim*p+c] );
+    }
+    matrixC[r*nDim+c] = fmax(finalValue,0);
+    printf("id is %d %d, final value is %f \n \n \n ", r, c, finalValue);
+    printf("id is %d %d, post function applied is %f \n \n \n ", r, c, matrixC[r*nDim+c]);
+}
+
 //New refers to most recent layer and old refers to second most recent layer (all while traversing the network backwards)
 //So the weightMatrix has dimensions lOldxlNew. We have to compute lNew many deltas, so there are lNew many work items globally
-__kernel void Multiply_Deltas_Buffers(global float* weightsMatrix, global float* deltasMatrixOld, global float* deltasMatrixNew,
-const int lNew, const int lOld)
+__kernel void Multiply_Deltas_Buffers_Identity(global float* weightsMatrix, global float* deltasMatrixOld, global float* deltasMatrixNew,
+const int lNew, const int lOld, global float* outputs)
 {
-    printf("In Multiply_Deltas_Buffers");
+    printf("In Multiply_Deltas_Buffers_Identity");
     const int x = get_global_id(0); //the row specification, from 0 to lNew-1
     const int y = 0;
     float A = 0, B = 0, temp = 0;
@@ -90,6 +142,69 @@ const int lNew, const int lOld)
     printf("id is %d %d, final value is %f \n \n \n ", x, y, temp);
 
     deltasMatrixNew[x] = temp;//write_imageui(deltasMatrixNew, (int2)(y,x), temp);
+}
+
+__kernel void Multiply_Deltas_Buffers_Sigmoid(global float* weightsMatrix, global float* deltasMatrixOld, global float* deltasMatrixNew,
+const int lNew, const int lOld, global float* outputs)
+{
+    printf("In Multiply_Deltas_Buffers_Sigmoid");
+    const int x = get_global_id(0); //the row specification, from 0 to lNew-1
+    const int y = 0;
+    float A = 0, B = 0, temp = 0;
+    
+    printf("start %d %d \n", x, y);
+
+    for (int p = 0 ; p < lOld ; p++){
+        A = weightsMatrix[p*lNew+x];
+        B = deltasMatrixOld[p];
+        printf("id is %d %d, values are %f %f \n ", x, y, A, B );
+        temp+=A*B;
+    }
+    printf("id is %d %d, final value is %f \n \n \n ", x, y, temp);
+
+    deltasMatrixNew[x] = temp * outputs[x] * (1.0 - outputs[x]); //sig(x) * (1-sig(x)) is the sigmoid derivative
+}
+
+__kernel void Multiply_Deltas_Buffers_Tanh(global float* weightsMatrix, global float* deltasMatrixOld, global float* deltasMatrixNew,
+const int lNew, const int lOld, global float* outputs)
+{
+    printf("In Multiply_Deltas_Buffers_Tanh");
+    const int x = get_global_id(0); //the row specification, from 0 to lNew-1
+    const int y = 0;
+    float A = 0, B = 0, temp = 0;
+    
+    printf("start %d %d \n", x, y);
+
+    for (int p = 0 ; p < lOld ; p++){
+        A = weightsMatrix[p*lNew+x];
+        B = deltasMatrixOld[p];
+        printf("id is %d %d, values are %f %f \n ", x, y, A, B );
+        temp+=A*B;
+    }
+    printf("id is %d %d, final value is %f \n \n \n ", x, y, temp);
+
+    deltasMatrixNew[x] = temp * (1 - pow(outputs[x],2));
+}
+
+__kernel void Multiply_Deltas_Buffers_ReLU(global float* weightsMatrix, global float* deltasMatrixOld, global float* deltasMatrixNew,
+const int lNew, const int lOld, global float* outputs)
+{
+    printf("In Multiply_Deltas_Buffers_ReLU");
+    const int x = get_global_id(0); //the row specification, from 0 to lNew-1
+    const int y = 0;
+    float A = 0, B = 0, temp = 0;
+    
+    printf("start %d %d \n", x, y);
+
+    for (int p = 0 ; p < lOld ; p++){
+        A = weightsMatrix[p*lNew+x];
+        B = deltasMatrixOld[p];
+        printf("id is %d %d, values are %f %f \n ", x, y, A, B );
+        temp+=A*B;
+    }
+    printf("id is %d %d, final value is %f \n \n \n ", x, y, temp);
+
+    deltasMatrixNew[x] = temp * (outputs[x] > 0.0? 1.0:0.0);
 }
 
 //New refers to most recent layer and old refers to second most recent layer (all while traversing the network backwards)
