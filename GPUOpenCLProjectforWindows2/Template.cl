@@ -20,7 +20,7 @@
  * problem reports or change requests be submitted to it directly
  *****************************************************************************/
 
-constant sampler_t sampler = CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP | CLK_FILTER_NEAREST;
+/*constant sampler_t sampler = CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP | CLK_FILTER_NEAREST;
 
 __kernel void Add(read_only image2d_t imageA, read_only image2d_t imageB, write_only image2d_t imageC)
 {
@@ -52,6 +52,49 @@ const int pDim)
 
     write_imageui(matrixC, (int2)(y, x), temp);
 }
+//New refers to most recent layer and old refers to second most recent layer (all while traversing the network backwards)
+//So the weightMatrix has dimensions lOldxlNew. We have to compute lNew many deltas, so there are lNew many work items globally
+__kernel void Multiply_Deltas_Images(read_only image2d_t weightsMatrix, read_only image2d_t deltasMatrixOld, write_only image2d_t deltasMatrixNew,
+const int lOld)
+{
+    printf("In Multiply_Deltas_Images");
+    const int x = get_global_id(0); //the row specification, from 0 to lNew-1
+    const int y = get_global_id(1);
+    int A = 0, B = 0, temp = 0;
+    
+    printf("start %d %d \n", x, y);
+
+    for (int p = 0 ; p < lOld ; p++){
+        A = read_imageui(weightsMatrix, sampler, (int2)(x, p)).x;
+        B = read_imageui(deltasMatrixOld, sampler, (int2)(y, p)).x;
+        printf("id is %d %d, values are %d %d \n ", x, y, A, B );
+        temp+=A*B;
+    }
+    printf("id is %d %d, final value is %d \n \n \n ", x, y, temp);
+
+    write_imageui(deltasMatrixNew, (int2)(y,x), temp);
+}
+
+__kernel void Update_Weights(read_only image2d_t deltasMatrix, read_only image2d_t outputsMatrix, global float* plss)
+{
+    printf("In Update_Weights");
+    const int x = get_global_id(0);
+    const int y = get_global_id(1);
+    int A = 0, B = 0;
+    
+    printf("start %d %d \n", x, y);
+
+    A = read_imageui(deltasMatrix, sampler, (int2)(0, x)).x;
+    B = read_imageui(outputsMatrix, sampler, (int2)(0, y)).x;
+    printf("id is %d %d, values are %d %d \n ", x, y, A, B );
+    int temp=A*B;
+
+    printf("id is %d %d, final value is %d \n \n \n ", x, y, temp);
+
+
+    //write_imageui(weightsMatrix, (int2)(y,x), temp);
+}
+*/
 
 __kernel void Multiply_Buffer_Identity(global float* matrixA, global float* matrixB, global float* matrixC,
 const int mDim, const int pDim, const int nDim)
@@ -207,29 +250,6 @@ const int lNew, const int lOld, global float* outputs)
     deltasMatrixNew[x] = temp * (outputs[x] > 0.0? 1.0:0.0);
 }
 
-//New refers to most recent layer and old refers to second most recent layer (all while traversing the network backwards)
-//So the weightMatrix has dimensions lOldxlNew. We have to compute lNew many deltas, so there are lNew many work items globally
-__kernel void Multiply_Deltas_Images(read_only image2d_t weightsMatrix, read_only image2d_t deltasMatrixOld, write_only image2d_t deltasMatrixNew,
-const int lOld)
-{
-    printf("In Multiply_Deltas_Images");
-    const int x = get_global_id(0); //the row specification, from 0 to lNew-1
-    const int y = get_global_id(1);
-    int A = 0, B = 0, temp = 0;
-    
-    printf("start %d %d \n", x, y);
-
-    for (int p = 0 ; p < lOld ; p++){
-        A = read_imageui(weightsMatrix, sampler, (int2)(x, p)).x;
-        B = read_imageui(deltasMatrixOld, sampler, (int2)(y, p)).x;
-        printf("id is %d %d, values are %d %d \n ", x, y, A, B );
-        temp+=A*B;
-    }
-    printf("id is %d %d, final value is %d \n \n \n ", x, y, temp);
-
-    write_imageui(deltasMatrixNew, (int2)(y,x), temp);
-}
-
 __kernel void Update_Weights_Buffers(global float* deltasMatrix, global float* outputsMatrix, global float* weightsMatrix
 ,const int deltasDim, const int outputsDim, const float learning_rate)
 {
@@ -248,23 +268,3 @@ __kernel void Update_Weights_Buffers(global float* deltasMatrix, global float* o
     weightsMatrix[x*outputsDim + y] = weightsMatrix[x*outputsDim + y] - learning_rate * temp;
     printf("id is %d %d, final value is %f \n \n \n ", x, y, weightsMatrix[x*outputsDim+y]);
 }
-
-/*__kernel void Update_Weights(read_only image2d_t deltasMatrix, read_only image2d_t outputsMatrix, global float* plss)
-{
-    printf("In Update_Weights");
-    const int x = get_global_id(0);
-    const int y = get_global_id(1);
-    int A = 0, B = 0;
-    
-    printf("start %d %d \n", x, y);
-
-    A = read_imageui(deltasMatrix, sampler, (int2)(0, x)).x;
-    B = read_imageui(outputsMatrix, sampler, (int2)(0, y)).x;
-    printf("id is %d %d, values are %d %d \n ", x, y, A, B );
-    int temp=A*B;
-
-    printf("id is %d %d, final value is %d \n \n \n ", x, y, temp);
-
-
-    //write_imageui(weightsMatrix, (int2)(y,x), temp);
-}*/

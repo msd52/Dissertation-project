@@ -201,7 +201,7 @@ ocl_args_d_t::ocl_args_d_t() :
             LogError("Error: clReleaseProgram returned '%s'.\n", TranslateOpenCLError(err));
         }
     }
-    /*if (srcA)
+    if (srcA)
     {
         err = clReleaseMemObject(srcA);
         if (CL_SUCCESS != err)
@@ -224,7 +224,7 @@ ocl_args_d_t::ocl_args_d_t() :
         {
             LogError("Error: clReleaseMemObject returned '%s'.\n", TranslateOpenCLError(err));
         }
-    }*/
+    }
     if (commandQueue)
     {
         err = clReleaseCommandQueue(commandQueue);
@@ -521,6 +521,7 @@ int GetPlatformAndDeviceVersion (cl_platform_id platformId, ocl_args_d_t *ocl)
 /*
  * Generate random value for input buffers
  */
+/*
 void generateInput(cl_int* inputArray, cl_uint arrayWidth, cl_uint arrayHeight)
 {
     srand(12345);
@@ -531,7 +532,7 @@ void generateInput(cl_int* inputArray, cl_uint arrayWidth, cl_uint arrayHeight)
     {
         inputArray[i] = rand();
     }
-}
+}*/
  
 
 void mGenerateMatrices(cl_float* inputArray, cl_uint height, cl_uint width)
@@ -794,157 +795,6 @@ Finish:
     return err;
 }*/
 
-/*
- * Create OpenCL buffers from host memory
- * These buffers will be used later by the OpenCL kernel
- */
-int CreateBufferArguments(ocl_args_d_t *ocl, cl_int* inputA, cl_int* inputB, cl_int* outputC, cl_uint arrayWidth, cl_uint arrayHeight)
-{
-    cl_int err = CL_SUCCESS;
-
-    cl_image_format format;
-    cl_image_desc desc;
-
-    // Define the image data-type and order -
-    // one channel (R) with unit values
-    format.image_channel_data_type = CL_UNSIGNED_INT32;
-    format.image_channel_order     = CL_R;
-
-    // Define the image properties (descriptor)
-    desc.image_type        = CL_MEM_OBJECT_IMAGE2D;
-    desc.image_width       = arrayWidth;
-    desc.image_height      = arrayHeight;
-    desc.image_depth       = 0;
-    desc.image_array_size  = 1;
-    desc.image_row_pitch   = 0;
-    desc.image_slice_pitch = 0;
-    desc.num_mip_levels    = 0;
-    desc.num_samples       = 0;
-#ifdef CL_VERSION_2_0
-    desc.mem_object        = NULL;
-#else
-    desc.buffer            = NULL;
-#endif
-
-    // Create first image based on host memory inputA
-    ocl->srcA = clCreateImage(ocl->context, CL_MEM_READ_ONLY | CL_MEM_USE_HOST_PTR, &format, &desc, inputA, &err);
-    if (CL_SUCCESS != err)
-    {
-        LogError("Error: clCreateImage for srcA returned %s\n", TranslateOpenCLError(err));
-        return err;
-    }
-
-    // Create second image based on host memory inputB
-    ocl->srcB = clCreateImage(ocl->context, CL_MEM_READ_ONLY | CL_MEM_USE_HOST_PTR, &format, &desc, inputB, &err);
-    if (CL_SUCCESS != err)
-    {
-        LogError("Error: clCreateImage for srcB returned %s\n", TranslateOpenCLError(err));
-        return err;
-    }
-
-    // Create third (output) image based on host memory outputC
-    ocl->dstMem = clCreateImage(ocl->context, CL_MEM_WRITE_ONLY | CL_MEM_USE_HOST_PTR, &format, &desc, outputC, &err);
-    if (CL_SUCCESS != err)
-    {
-        LogError("Error: clCreateImage for dstMem returned %s\n", TranslateOpenCLError(err));
-        return err;
-    }
-
-
-    return CL_SUCCESS;
-}
-
-int mCreateBufferArguments(ocl_args_d_t* ocl, cl_int* inputA, cl_int* inputB, cl_int* outputC, cl_uint mDim, cl_uint pDim, cl_uint nDim)
-{
-    cl_int err = CL_SUCCESS;
-
-    cl_image_format format;
-    cl_image_desc desc;
-
-    // Define the image data-type and order -
-    // one channel (R) with unit values
-    format.image_channel_data_type = CL_UNSIGNED_INT32;
-    format.image_channel_order = CL_R;
-
-    // Define the image properties (descriptor)
-    desc.image_type = CL_MEM_OBJECT_IMAGE2D;
-    desc.image_width = pDim;
-    desc.image_height = mDim;
-    desc.image_depth = 0;
-    desc.image_array_size = 1;
-    desc.image_row_pitch = 0;
-    desc.image_slice_pitch = 0;
-    desc.num_mip_levels = 0;
-    desc.num_samples = 0;
-#ifdef CL_VERSION_2_0
-    desc.mem_object = NULL;
-#else
-    desc.buffer = NULL;
-#endif
-
-    // Create first image based on host memory inputA
-    ocl->srcA = clCreateImage(ocl->context, CL_MEM_READ_ONLY | CL_MEM_USE_HOST_PTR, &format, &desc, inputA, &err);
-    if (CL_SUCCESS != err)
-    {
-        LogError("Error: clCreateImage for srcA returned %s\n", TranslateOpenCLError(err));
-        return err;
-    }
-
-    desc.image_width = nDim;
-    desc.image_height = pDim;
-    // Create second image based on host memory inputB
-    ocl->srcB = clCreateImage(ocl->context, CL_MEM_READ_ONLY | CL_MEM_USE_HOST_PTR, &format, &desc, inputB, &err);
-    if (CL_SUCCESS != err)
-    {
-        LogError("Error: clCreateImage for srcB returned %s\n", TranslateOpenCLError(err));
-        return err;
-    }
-
-    desc.image_width = nDim;
-    desc.image_height = mDim;
-    // Create third (output) image based on host memory outputC
-    ocl->dstMem = clCreateImage(ocl->context, CL_MEM_WRITE_ONLY | CL_MEM_USE_HOST_PTR, &format, &desc, outputC, &err);
-    if (CL_SUCCESS != err)
-    {
-        LogError("Error: clCreateImage for dstMem returned %s\n", TranslateOpenCLError(err));
-        return err;
-    }
-
-
-    return CL_SUCCESS;
-}
-
-/*
- * Set kernel arguments
- */
-cl_uint setKernelArguments(ocl_args_d_t* ocl)
-{
-    cl_int err = CL_SUCCESS;
-
-    err = clSetKernelArg(ocl->kernel, 0, sizeof(cl_mem), (void*)&ocl->srcA);
-    if (CL_SUCCESS != err)
-    {
-        LogError("error: Failed to set argument srcA, returned %s\n", TranslateOpenCLError(err));
-        return err;
-    }
-
-    err = clSetKernelArg(ocl->kernel, 1, sizeof(cl_mem), (void*)&ocl->srcB);
-    if (CL_SUCCESS != err)
-    {
-        LogError("Error: Failed to set argument srcB, returned %s\n", TranslateOpenCLError(err));
-        return err;
-    }
-
-    err = clSetKernelArg(ocl->kernel, 2, sizeof(cl_mem), (void*)&ocl->dstMem);
-    if (CL_SUCCESS != err)
-    {
-        LogError("Error: Failed to set argument dstMem, returned %s\n", TranslateOpenCLError(err));
-        return err;
-    }
-
-
-    return err;
-}
 
 /*
  * Set kernel arguments
@@ -1041,58 +891,6 @@ cl_uint mExecuteMultiplyKernel(ocl_args_d_t* ocl, cl_uint mDim, cl_uint nDim)
     }
 
     return CL_SUCCESS;
-}
-
-
-/*
- * "Read" the result buffer (mapping the buffer to the host memory address)
- */
-bool ReadAndVerify(ocl_args_d_t *ocl, cl_uint width, cl_uint height, cl_int *inputA, cl_int *inputB)
-{
-    cl_int err = CL_SUCCESS;
-    bool result = true;
-
-    // Enqueue a command to map the buffer object (ocl->dstMem) into the host address space and returns a pointer to it
-    // The map operation is blocking
-    size_t origin[] = {0, 0, 0};
-    size_t region[] = {width, height, 1};
-    size_t image_row_pitch;
-    size_t image_slice_pitch;
-    cl_int *resultPtr = (cl_int *)clEnqueueMapImage(ocl->commandQueue, ocl->dstMem, true, CL_MAP_READ, origin, region, &image_row_pitch, &image_slice_pitch, 0, NULL, NULL, &err);
-
-    if (CL_SUCCESS != err)
-    {
-        LogError("Error: clEnqueueMapBuffer returned %s\n", TranslateOpenCLError(err));
-        return false;
-    }
-
-    // Call clFinish to guarantee that output region is updated
-    err = clFinish(ocl->commandQueue);
-    if (CL_SUCCESS != err)
-    {
-        LogError("Error: clFinish returned %s\n", TranslateOpenCLError(err));
-    }
-
-    // We mapped dstMem to resultPtr, so resultPtr is ready and includes the kernel output !!!
-    // Verify the results
-    unsigned int size = width * height;
-    for (unsigned int k = 0; k < size; ++k)
-    {
-        if (resultPtr[k] != inputA[k] + inputB[k])
-        {
-            LogError("Verification failed at %d: (%d + %d = %d)\n", k, inputA[k], inputB[k], resultPtr[k]);
-            result = false;
-        }
-    }
-
-     // Unmapped the output buffer before releasing it
-    err = clEnqueueUnmapMemObject(ocl->commandQueue, ocl->dstMem, resultPtr, 0, NULL, NULL);
-    if (CL_SUCCESS != err)
-    {
-        LogError("Error: clEnqueueUnmapMemObject returned %s\n", TranslateOpenCLError(err));
-    }
-
-    return result;
 }
 
 cl_float MSECostFunction(cl_float correctOutput, cl_float networkOutput) {
@@ -1200,10 +998,27 @@ int _tmain(int argc, TCHAR* argv[])
     cl_uint mDim = 1;
     cl_uint pDim;
     cl_uint nDim;
+    //A FEW EXPLANATIONS FOR HOW THIS WORKS
+    //first, we have our outer loop that performs for a set number of iterations
+    //in each iterations, we perform 3 different loops
 
+    //the 1st loop, corresponds to the inference phase (forward pass).
+
+    //The 2nd loop (and the little bit of code before it) calculates the deltas, i.e. the
+    //partial derivatives of the cost function wrt each node's pre-activation-function output.
+    //This is necessary because the way we calculate the partial derivatives of the weights is using
+    //the chain rule, and one of the 2 terms that comes up is this one (the next one is calculated
+    //in the next loop).
+
+    //The 3rd loop calculates the second term of the partial derivatives of the weights and updates
+    //the weights. The reason I created both a delta calculation loop and a weight update loop,
+    //is that even though the delta calculation has to happen layer by layer (since previous layer deltas
+    //are used to calculate next layer ones), the weight updates can be completely parallelized across
+    // both nodes (as with deltas) and layers. This means I can just replace the 3rd loop with one
+    //clEnqueueNDRangeKernel invocation (haven't done this yet, but will in the future).
     const int layers = 3; //We don't count input as a layer
-    cl_uint Dims[layers + 1] = { 3,2,5,1 }; //last layer should always be set to 1
-    const int numAF = 4; //num of activation functions
+    cl_uint Dims[layers + 1] = { 3,2,5,1 }; //last layer should always be set to 1 for regression
+    const int numAF = 4; //num of activation functions, unrelated to num of layers
     char* activationFunctionKernelNames[numAF] = { "Multiply_Buffer_Identity",
     "Multiply_Buffer_Sigmoid","Multiply_Buffer_Tanh","Multiply_Buffer_ReLU" };
     char* activationFunctionDeltasKernelNames[numAF] = { "Multiply_Deltas_Buffers_Identity",
@@ -1304,7 +1119,7 @@ int _tmain(int argc, TCHAR* argv[])
             _aligned_free(tempWeightArray);
     }
 
-    int iterations = 20;
+    int iterations = 30;
     int optimizedSizeCosts = ((sizeof(cl_float) * iterations - 1) / 64 + 1) * 64;
     cl_float* costs = (cl_float*)_aligned_malloc(optimizedSizeCosts, 4096);
     for (int iter = 0; iter < iterations; iter++) {
@@ -1475,7 +1290,6 @@ int _tmain(int argc, TCHAR* argv[])
         }
     }
 
-    std::cout << "May god be with you" << std::endl;
     for (int i = 0; i < iterations; i++) {
         std::cout << costs[i] << '\n';
     }
