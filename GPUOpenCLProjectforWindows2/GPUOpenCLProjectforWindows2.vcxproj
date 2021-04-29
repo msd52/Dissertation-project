@@ -31,6 +31,7 @@
   <PropertyGroup Label="Globals">
     <ProjectGuid>{3702386f-89e7-48cf-89fb-118aad8df0bc}</ProjectGuid>
     <RootNamespace>GPUOpenCLProjectforWindows2</RootNamespace>
+    <ProjectName>GPUOpenCLProjectforWindows2</ProjectName>
   </PropertyGroup>
   <!-- Workaround for VS Template engine (latest Windows SDK selection) -->
   <PropertyGroup Condition="'$(WindowsTargetPlatformVersion)'==''">

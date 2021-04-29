@@ -20,81 +20,262 @@
  * problem reports or change requests be submitted to it directly
  *****************************************************************************/
 
-/*constant sampler_t sampler = CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP | CLK_FILTER_NEAREST;
+constant sampler_t sampler = CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP | CLK_FILTER_NEAREST;
 
-__kernel void Add(read_only image2d_t imageA, read_only image2d_t imageB, write_only image2d_t imageC)
-{
-    const int x = get_global_id(0);
-    const int y = get_global_id(1);
+#define TS 16
+#define WPT 8
+#define RTS 2
+#define WPTM 4
+#define WPTN 4
 
-    uint A = read_imageui(imageA, sampler, (int2)(x, y)).x;
-    uint B = read_imageui(imageB, sampler, (int2)(x, y)).x;
 
-    write_imageui(imageC, (int2)(x, y), A + B);
+//2D register tiling
+/*__kernel void Matrix_Multiply_Kernel_4(global float* matrixA, global float* matrixB, global float* matrixC,
+const int mDim, const int pDim, const int nDim)
+{  
+
+ // Thread identifiers
+    const int row = get_local_id(0); // Local row ID (max: TS)
+    const int col = get_local_id(1); // Local col ID (max: TS/WPT == RTS)
+    const int globalRow = TS*get_group_id(0) + row; // Row ID of C (0..M)
+    const int globalCol = TS*get_group_id(1) + col; // Col ID of C (0..N)
+ 
+    // Local memory to fit a tile of TS*TS elements of A and B
+    __local float Asub[TS][TS];
+    __local float Bsub[TS][TS];
+ 
+    // Initialise the accumulation registers
+    float acc[WPTM][WPTN];
+ 
+    // Initialise the accumulation registers
+    for (int wm=0; wm<WPTM; wm++) {
+        for (int wn=0; wn<WPTN; wn++) {
+            acc[wm][wn] = 0.0f;
+        }
+    }
+    
+    // Loop over all tiles
+    const int numTiles = pDim/TS;
+    for (int t=0; t<numTiles; t++) {
+ 
+        // Load one tile of A and B into local memory
+        const int tiledRow = TS*t + row;
+        const int tiledCol = TS*t + col;
+        for (int w=0; w<WPT; w++) {
+            Asub[row][col+w*RTS] = matrixA[globalRow*pDim+(tiledCol + w*RTS)];
+            Bsub[row][col+w*RTS] = matrixB[(globalCol + w*RTS) + tiledRow*pDim];
+        }
+        
+        // Synchronise to make sure the tile is loaded
+        barrier(CLK_LOCAL_MEM_FENCE);
+ 
+        // Perform the computation for a single tile
+        for (int k=0; k<TS; k++) {
+            //UNROLLED
+            for (int w=0; w<WPT; ++w) {
+                acc[w] += Asub[row][k] * Bsub[k][col + w*RTS];
+            }
+        }
+ 
+        // Synchronise before loading the next tile
+        barrier(CLK_LOCAL_MEM_FENCE);
+    }
+ 
+    // Store the final results in C
+    for (int w=0; w<WPT; ++w) {
+        matrixC[(globalCol + w*RTS) + globalRow*pDim] = acc[w];
+    }
+}*/
+
+__kernel void Matrix_Multiply_Kernel_3b(global float* matrixA, global float* matrixB, global float* matrixC,
+const int mDim, const int pDim, const int nDim)
+{  
+
+ // Thread identifiers
+    const int row = get_local_id(0); // Local row ID (max: TS)
+    const int col = get_local_id(1); // Local col ID (max: TS/WPT == RTS)
+    const int globalRow = TS*get_group_id(0) + row; // Row ID of C (0..M)
+    const int globalCol = TS*get_group_id(1) + col; // Col ID of C (0..N)
+ 
+    // Local memory to fit a tile of TS*TS elements of A and B
+    __local float Asub[TS][TS];
+    __local float Bsub[TS][TS];
+ 
+    // Initialise the accumulation registers
+    float acc[WPT];
+    for (int w=0; w<WPT; w+=4) {
+        acc[w] = 0.0f;
+        acc[w+1] = 0.0f;
+        acc[w+2] = 0.0f;
+        acc[w+3] = 0.0f;
+    }
+    
+    // Loop over all tiles
+    const int numTiles = pDim/TS;
+    for (int t=0; t<numTiles; t++) {
+ 
+        // Load one tile of A and B into local memory
+        const int tiledRow = TS*t + row;
+        const int tiledCol = TS*t + col;
+        for (int w=0; w<WPT; w+=4) {
+            Asub[row][col+w*RTS] = matrixA[globalRow*pDim+(tiledCol + w*RTS)];
+            Bsub[row][col+w*RTS] = matrixB[(globalCol + w*RTS) + tiledRow*pDim];
+            Asub[row][col+(w+1)*RTS] = matrixA[globalRow*pDim+(tiledCol + (w+1)*RTS)];
+            Bsub[row][col+(w+1)*RTS] = matrixB[(globalCol + (w+1)*RTS) + tiledRow*pDim];
+            Asub[row][col+(w+2)*RTS] = matrixA[globalRow*pDim+(tiledCol + (w+2)*RTS)];
+            Bsub[row][col+(w+2)*RTS] = matrixB[(globalCol + (w+2)*RTS) + tiledRow*pDim];
+            Asub[row][col+(w+3)*RTS] = matrixA[globalRow*pDim+(tiledCol + (w+3)*RTS)];
+            Bsub[row][col+(w+3)*RTS] = matrixB[(globalCol + (w+3)*RTS) + tiledRow*pDim];
+        }
+        
+        // Synchronise to make sure the tile is loaded
+        barrier(CLK_LOCAL_MEM_FENCE);
+ 
+        // Perform the computation for a single tile
+        for (int k=0; k<TS; k++) {
+            //UNROLLED
+            for (int w=0; w<WPT; w+=4) {
+                acc[w] += Asub[row][k] * Bsub[k][col + w*RTS];
+                acc[w+1] += Asub[row][k] * Bsub[k][col + (w+1)*RTS];
+                acc[w+2] += Asub[row][k] * Bsub[k][col + (w+2)*RTS];
+                acc[w+3] += Asub[row][k] * Bsub[k][col + (w+3)*RTS];
+            }
+        }
+ 
+        // Synchronise before loading the next tile
+        barrier(CLK_LOCAL_MEM_FENCE);
+    }
+ 
+    // Store the final results in C
+    for (int w=0; w<WPT; w+=4) {
+        matrixC[(globalCol + w*RTS) + globalRow*pDim] = acc[w];
+        matrixC[(globalCol + (w+1)*RTS) + globalRow*pDim] = acc[w+1];
+        matrixC[(globalCol + (w+2)*RTS) + globalRow*pDim] = acc[w+2];
+        matrixC[(globalCol + (w+3)*RTS) + globalRow*pDim] = acc[w+3];
+    }
 }
 
-__kernel void Multiply_Image(read_only image2d_t matrixA, read_only image2d_t matrixB, write_only image2d_t matrixC,
-const int pDim)
-{
-    const int x = get_global_id(0); //the row specification
-    const int y = get_global_id(1); //the column specification
-    int A = 0, B = 0, temp = 0;
-    
-    printf("start %d %d \n", x, y);
+__kernel void Matrix_Multiply_Kernel_3(global float* matrixA, global float* matrixB, global float* matrixC,
+const int mDim, const int pDim, const int nDim)
+{  
 
+ // Thread identifiers
+    const int row = get_local_id(0); // Local row ID (max: TS)
+    const int col = get_local_id(1); // Local col ID (max: TS/WPT == RTS)
+    const int globalRow = TS*get_group_id(0) + row; // Row ID of C (0..M)
+    const int globalCol = TS*get_group_id(1) + col; // Col ID of C (0..N)
+ 
+    // Local memory to fit a tile of TS*TS elements of A and B
+    __local float Asub[TS][TS];
+    __local float Bsub[TS][TS];
+ 
+    // Initialise the accumulation registers
+    float acc[WPT];
+    for (int w=0; w<WPT; w++) {
+        acc[w] = 0.0f;
+    }
+    
+    // Loop over all tiles
+    const int numTiles = pDim/TS;
+    for (int t=0; t<numTiles; t++) {
+ 
+        // Load one tile of A and B into local memory
+        const int tiledRow = TS*t + row;
+        const int tiledCol = TS*t + col;
+        for (int w=0; w<WPT; w++) {
+            Asub[row][col+w*RTS] = matrixA[globalRow*pDim+(tiledCol + w*RTS)];
+            Bsub[row][col+w*RTS] = matrixB[(globalCol + w*RTS) + tiledRow*pDim];
+        }
+        
+        // Synchronise to make sure the tile is loaded
+        barrier(CLK_LOCAL_MEM_FENCE);
+ 
+        // Perform the computation for a single tile
+        for (int k=0; k<TS; k++) {
+            //UNROLLED
+            for (int w=0; w<WPT; ++w) {
+                acc[w] += Asub[row][k] * Bsub[k][col + w*RTS];
+            }
+        }
+ 
+        // Synchronise before loading the next tile
+        barrier(CLK_LOCAL_MEM_FENCE);
+    }
+ 
+    // Store the final results in C
+    for (int w=0; w<WPT; ++w) {
+        matrixC[(globalCol + w*RTS) + globalRow*pDim] = acc[w];
+    }
+}
+
+__kernel void Matrix_Multiply_Kernel_2(global float* matrixA, global float* matrixB, global float* matrixC,
+const int mDim, const int pDim, const int nDim)
+{    
+    // Thread identifiers
+    const int row = get_local_id(0); // Local row ID (max: TS)
+    const int col = get_local_id(1); // Local col ID (max: TS)
+    const int globalRow = TS*get_group_id(0) + row; // Row ID of C (0..M)
+    const int globalCol = TS*get_group_id(1) + col; // Col ID of C (0..N)
+ 
+    // Local memory to fit a tile of TS*TS elements of A and B
+    __local float Asub[TS][TS];
+    __local float Bsub[TS][TS];
+ 
+    // Initialise the accumulation register
+    float acc = 0.0f;
+    
+    // Loop over all tiles
+    const int numTiles = pDim/TS;
+    for (int t=0; t<numTiles; t++) {
+ 
+        // Load one tile of A and B into local memory
+        const int tiledRow = TS*t + row;
+        const int tiledCol = TS*t + col;
+        Asub[row][col] = matrixA[tiledCol + globalRow*pDim];
+        Bsub[row][col] = matrixB[globalCol+ tiledRow*pDim];
+ 
+        // Synchronise to make sure the tile is loaded
+        barrier(CLK_LOCAL_MEM_FENCE);
+ 
+        // Perform the computation for a single tile
+        for (int k=0; k<TS; k++) {
+            acc += Asub[row][k] * Bsub[k][col];
+        }
+ 
+        // Synchronise before loading the next tile
+        barrier(CLK_LOCAL_MEM_FENCE);
+    }
+ 
+    // Store the final result in C
+    matrixC[globalCol + globalRow*pDim] = acc;
+}
+
+__kernel void scalar_mul(__global const float *a,
+        __global const float *b,
+        __global float *result)
+{
+        int i = get_global_id(0);
+        result[i] =a[i] * b[i];        
+}
+
+
+__kernel void Matrix_Multiply_Kernel_1(global float* matrixA, global float* matrixB, global float* matrixC,
+const int mDim, const int pDim, const int nDim)
+{
+    const int r = get_global_id(0);
+    const int c = get_global_id(1);
+    float finalValue = 0.0;
+    //printf("start IBuffer %d %d \n", r, c);
+    //printf("pls IBuffer be right %d %d should be %f %f and ndim is %d\n", r, c, matrixB[0], matrixB[1], nDim);
     for (int p = 0 ; p < pDim ; p++){
-        A = read_imageui(matrixA, sampler, (int2)(p, x)).x;
-        B = read_imageui(matrixB, sampler, (int2)(y, p)).x;
-        printf("id is %d %d, values are %d %d \n ", x, y, A, B );
-        temp+=A*B;
+        finalValue+=matrixA[pDim*r+p]*matrixB[nDim*p+c];
+        //printf("id is %d %d, values are %f %f \n ", r, c, matrixA[pDim*r+p], matrixB[nDim*p+c] );
     }
-    printf("id is %d %d, final value is %d \n \n \n ", x, y, temp);
-
-    write_imageui(matrixC, (int2)(y, x), temp);
-}
-//New refers to most recent layer and old refers to second most recent layer (all while traversing the network backwards)
-//So the weightMatrix has dimensions lOldxlNew. We have to compute lNew many deltas, so there are lNew many work items globally
-__kernel void Multiply_Deltas_Images(read_only image2d_t weightsMatrix, read_only image2d_t deltasMatrixOld, write_only image2d_t deltasMatrixNew,
-const int lOld)
-{
-    printf("In Multiply_Deltas_Images");
-    const int x = get_global_id(0); //the row specification, from 0 to lNew-1
-    const int y = get_global_id(1);
-    int A = 0, B = 0, temp = 0;
-    
-    printf("start %d %d \n", x, y);
-
-    for (int p = 0 ; p < lOld ; p++){
-        A = read_imageui(weightsMatrix, sampler, (int2)(x, p)).x;
-        B = read_imageui(deltasMatrixOld, sampler, (int2)(y, p)).x;
-        printf("id is %d %d, values are %d %d \n ", x, y, A, B );
-        temp+=A*B;
-    }
-    printf("id is %d %d, final value is %d \n \n \n ", x, y, temp);
-
-    write_imageui(deltasMatrixNew, (int2)(y,x), temp);
+    matrixC[r*nDim+c] = finalValue;
+    //printf("id IBuffer is %d %d, final value is %f \n \n \n ", r, c, finalValue);
+    //printf("id IBuffer is %d %d, post function appied is %f \n \n \n ", r, c, finalValue);
 }
 
-__kernel void Update_Weights(read_only image2d_t deltasMatrix, read_only image2d_t outputsMatrix, global float* plss)
-{
-    printf("In Update_Weights");
-    const int x = get_global_id(0);
-    const int y = get_global_id(1);
-    int A = 0, B = 0;
-    
-    printf("start %d %d \n", x, y);
-
-    A = read_imageui(deltasMatrix, sampler, (int2)(0, x)).x;
-    B = read_imageui(outputsMatrix, sampler, (int2)(0, y)).x;
-    printf("id is %d %d, values are %d %d \n ", x, y, A, B );
-    int temp=A*B;
-
-    printf("id is %d %d, final value is %d \n \n \n ", x, y, temp);
-
-
-    //write_imageui(weightsMatrix, (int2)(y,x), temp);
-}
-*/
 
 __kernel void Multiply_Buffer_Identity(global float* matrixA, global float* matrixB, global float* matrixC,
 const int mDim, const int pDim, const int nDim)
@@ -102,15 +283,15 @@ const int mDim, const int pDim, const int nDim)
     const int r = get_global_id(0);
     const int c = get_global_id(1);
     float finalValue = 0.0;
-    printf("start %d %d \n", r, c);
-    printf("pls be right %d %d should be %f %f and ndim is %d\n", r, c, matrixB[0], matrixB[1], nDim);
+    //printf("start IBuffer %d %d \n", r, c);
+    //printf("pls IBuffer be right %d %d should be %f %f and ndim is %d\n", r, c, matrixB[0], matrixB[1], nDim);
     for (int p = 0 ; p < pDim ; p++){
         finalValue+=matrixA[pDim*r+p]*matrixB[nDim*p+c];
-        printf("id is %d %d, values are %f %f \n ", r, c, matrixA[pDim*r+p], matrixB[nDim*p+c] );
+        //printf("id is %d %d, values are %f %f \n ", r, c, matrixA[pDim*r+p], matrixB[nDim*p+c] );
     }
     matrixC[r*nDim+c] = finalValue;
-    printf("id is %d %d, final value is %f \n \n \n ", r, c, finalValue);
-    printf("id is %d %d, post function appied is %f \n \n \n ", r, c, finalValue);
+    //printf("id IBuffer is %d %d, final value is %f \n \n \n ", r, c, finalValue);
+    //printf("id IBuffer is %d %d, post function appied is %f \n \n \n ", r, c, finalValue);
 }
 
 __kernel void Multiply_Buffer_Sigmoid(global float* matrixA, global float* matrixB, global float* matrixC,
@@ -119,15 +300,15 @@ const int mDim, const int pDim, const int nDim)
     const int r = get_global_id(0);
     const int c = get_global_id(1);
     float finalValue = 0.0;
-    printf("start %d %d \n", r, c);
-    printf("pls be right %d %d should be %f %f and ndim is %d\n", r, c, matrixB[0], matrixB[1], nDim);
+    //printf("start %d %d \n", r, c);
+    //printf("pls be right %d %d should be %f %f and ndim is %d\n", r, c, matrixB[0], matrixB[1], nDim);
     for (int p = 0 ; p < pDim ; p++){
         finalValue+=matrixA[pDim*r+p]*matrixB[nDim*p+c];
-        printf("id is %d %d, values are %f %f \n ", r, c, matrixA[pDim*r+p], matrixB[nDim*p+c] );
+        //printf("id is %d %d, values are %f %f \n ", r, c, matrixA[pDim*r+p], matrixB[nDim*p+c] );
     }
     matrixC[r*nDim+c] = 1.0 / (1.0 + exp(-finalValue));
-    printf("id is %d %d, final value is %f \n \n \n ", r, c, finalValue);
-    printf("id is %d %d, post function applied is %f \n \n \n ", r, c, matrixC[r*nDim+c]);
+    //printf("id is %d %d, final value is %f \n \n \n ", r, c, finalValue);
+    //printf("id is %d %d, post function applied is %f \n \n \n ", r, c, matrixC[r*nDim+c]);
 }
 
 __kernel void Multiply_Buffer_Tanh(global float* matrixA, global float* matrixB, global float* matrixC,
@@ -136,15 +317,15 @@ const int mDim, const int pDim, const int nDim)
     const int r = get_global_id(0);
     const int c = get_global_id(1);
     float finalValue = 0.0;
-    printf("start %d %d \n", r, c);
-    printf("pls be right %d %d should be %f %f and ndim is %d\n", r, c, matrixB[0], matrixB[1], nDim);
+    //printf("start %d %d \n", r, c);
+    //printf("pls be right %d %d should be %f %f and ndim is %d\n", r, c, matrixB[0], matrixB[1], nDim);
     for (int p = 0 ; p < pDim ; p++){
         finalValue+=matrixA[pDim*r+p]*matrixB[nDim*p+c];
-        printf("id is %d %d, values are %f %f \n ", r, c, matrixA[pDim*r+p], matrixB[nDim*p+c] );
+        //printf("id is %d %d, values are %f %f \n ", r, c, matrixA[pDim*r+p], matrixB[nDim*p+c] );
     }
     matrixC[r*nDim+c] = tanh(finalValue);
-    printf("id is %d %d, final value is %f \n \n \n ", r, c, finalValue);
-    printf("id is %d %d, post function applied is %f \n \n \n ", r, c, matrixC[r*nDim+c]);
+    //printf("id is %d %d, final value is %f \n \n \n ", r, c, finalValue);
+    //printf("id is %d %d, post function applied is %f \n \n \n ", r, c, matrixC[r*nDim+c]);
 }
 
 __kernel void Multiply_Buffer_ReLU(global float* matrixA, global float* matrixB, global float* matrixC,
@@ -153,118 +334,121 @@ const int mDim, const int pDim, const int nDim)
     const int r = get_global_id(0);
     const int c = get_global_id(1);
     float finalValue = 0.0;
-    printf("start %d %d \n", r, c);
-    printf("pls be right %d %d should be %f %f and ndim is %d\n", r, c, matrixB[0], matrixB[1], nDim);
+    //printf("start %d %d \n", r, c);
+    //printf("pls be right %d %d should be %f %f and ndim is %d\n", r, c, matrixB[0], matrixB[1], nDim);
     for (int p = 0 ; p < pDim ; p++){
         finalValue+=matrixA[pDim*r+p]*matrixB[nDim*p+c];
-        printf("id is %d %d, values are %f %f \n ", r, c, matrixA[pDim*r+p], matrixB[nDim*p+c] );
+        //printf("id is %d %d, values are %f %f \n ", r, c, matrixA[pDim*r+p], matrixB[nDim*p+c] );
     }
     matrixC[r*nDim+c] = fmax(finalValue,0);
-    printf("id is %d %d, final value is %f \n \n \n ", r, c, finalValue);
-    printf("id is %d %d, post function applied is %f \n \n \n ", r, c, matrixC[r*nDim+c]);
+    //printf("id is %d %d, final value is %f \n \n \n ", r, c, finalValue);
+    //printf("id is %d %d, post function applied is %f \n \n \n ", r, c, matrixC[r*nDim+c]);
 }
 
-//New refers to most recent layer and old refers to second most recent layer (all while traversing the network backwards)
+//New refers to current layer and old refers to previous layer (all while traversing the network backwards)
 //So the weightMatrix has dimensions lOldxlNew. We have to compute lNew many deltas, so there are lNew many work items globally
 __kernel void Multiply_Deltas_Buffers_Identity(global float* weightsMatrix, global float* deltasMatrixOld, global float* deltasMatrixNew,
-const int lNew, const int lOld, global float* outputs)
+const int lNew, const int lOld, const int batchSize, global float* outputs)
 {
-    printf("In Multiply_Deltas_Buffers_Identity");
+    //printf("In Multiply_Deltas_Buffers_Identity");
     const int x = get_global_id(0); //the row specification, from 0 to lNew-1
-    const int y = 0;
-    float A = 0, B = 0, temp = 0;
+    const int y = get_global_id(1); //sample point id
+    float A,B, temp = 0;
     
-    printf("start %d %d \n", x, y);
+    //printf("start %d %d \n", x, y);
 
     for (int p = 0 ; p < lOld ; p++){
-        A = weightsMatrix[p*lNew+x];//read_imageui(weightsMatrix, sampler, (int2)(x, p)).x;
-        B = deltasMatrixOld[p];//read_imageui(deltasMatrixOld, sampler, (int2)(y, p)).x;
-        printf("id is %d %d, values are %f %f \n ", x, y, A, B );
+        A = weightsMatrix[p*lNew+x];
+        B = deltasMatrixOld[p*batchSize+y];
+        //printf("id is %d %d, values are %f %f \n ", x, y, A, B );
         temp+=A*B;
     }
-    printf("id is %d %d, final value is %f \n \n \n ", x, y, temp);
+    //printf("id is %d %d, final value is %f \n \n \n ", x, y, temp);
 
-    deltasMatrixNew[x] = temp;//write_imageui(deltasMatrixNew, (int2)(y,x), temp);
+    deltasMatrixNew[x*batchSize + y] = temp;
 }
 
 __kernel void Multiply_Deltas_Buffers_Sigmoid(global float* weightsMatrix, global float* deltasMatrixOld, global float* deltasMatrixNew,
-const int lNew, const int lOld, global float* outputs)
+const int lNew, const int lOld, const int batchSize, global float* outputs)
 {
-    printf("In Multiply_Deltas_Buffers_Sigmoid");
+    //printf("In Multiply_Deltas_Buffers_Sigmoid");
     const int x = get_global_id(0); //the row specification, from 0 to lNew-1
-    const int y = 0;
-    float A = 0, B = 0, temp = 0;
+    const int y = get_global_id(1); //sample point id
+    float A,B, temp = 0;
     
-    printf("start %d %d \n", x, y);
+    //printf("start %d %d \n", x, y);
 
     for (int p = 0 ; p < lOld ; p++){
         A = weightsMatrix[p*lNew+x];
-        B = deltasMatrixOld[p];
+        B = deltasMatrixOld[p*batchSize+y];
         printf("id is %d %d, values are %f %f \n ", x, y, A, B );
         temp+=A*B;
     }
-    printf("id is %d %d, final value is %f \n \n \n ", x, y, temp);
+   // printf("id is %d %d, final value is %f \n \n \n ", x, y, temp);
 
-    deltasMatrixNew[x] = temp * outputs[x] * (1.0 - outputs[x]); //sig(x) * (1-sig(x)) is the sigmoid derivative
+    deltasMatrixNew[x*batchSize + y] = temp * outputs[x*batchSize+y] * (1.0 - outputs[x*batchSize+y]); //sig(x) * (1-sig(x)) is the sigmoid derivative
 }
 
 __kernel void Multiply_Deltas_Buffers_Tanh(global float* weightsMatrix, global float* deltasMatrixOld, global float* deltasMatrixNew,
-const int lNew, const int lOld, global float* outputs)
+const int lNew, const int lOld, const int batchSize, global float* outputs)
 {
     printf("In Multiply_Deltas_Buffers_Tanh");
     const int x = get_global_id(0); //the row specification, from 0 to lNew-1
-    const int y = 0;
-    float A = 0, B = 0, temp = 0;
+    const int y = get_global_id(1); //sample point id
+    float A,B, temp = 0;
     
     printf("start %d %d \n", x, y);
 
     for (int p = 0 ; p < lOld ; p++){
         A = weightsMatrix[p*lNew+x];
-        B = deltasMatrixOld[p];
+        B = deltasMatrixOld[p*batchSize+y];
         printf("id is %d %d, values are %f %f \n ", x, y, A, B );
         temp+=A*B;
     }
     printf("id is %d %d, final value is %f \n \n \n ", x, y, temp);
 
-    deltasMatrixNew[x] = temp * (1 - pow(outputs[x],2));
+    deltasMatrixNew[x*batchSize + y] = temp * (1 - pow(outputs[x*batchSize+y],2));
 }
 
 __kernel void Multiply_Deltas_Buffers_ReLU(global float* weightsMatrix, global float* deltasMatrixOld, global float* deltasMatrixNew,
-const int lNew, const int lOld, global float* outputs)
+const int lNew, const int lOld, const int batchSize, global float* outputs)
 {
-    printf("In Multiply_Deltas_Buffers_ReLU");
+    //printf("In Multiply_Deltas_Buffers_ReLU");
     const int x = get_global_id(0); //the row specification, from 0 to lNew-1
-    const int y = 0;
-    float A = 0, B = 0, temp = 0;
+    const int y = get_global_id(1); //sample point id
+    float A,B, temp = 0;
     
-    printf("start %d %d \n", x, y);
+    //printf("start %d %d \n", x, y);
 
     for (int p = 0 ; p < lOld ; p++){
         A = weightsMatrix[p*lNew+x];
-        B = deltasMatrixOld[p];
-        printf("id is %d %d, values are %f %f \n ", x, y, A, B );
+        B = deltasMatrixOld[p*batchSize+y];
+        //printf("id is %d %d, values are %f %f \n ", x, y, A, B );
         temp+=A*B;
     }
-    printf("id is %d %d, final value is %f \n \n \n ", x, y, temp);
+    //printf("id is %d %d, final value is %f \n \n \n ", x, y, temp);
 
-    deltasMatrixNew[x] = temp * (outputs[x] > 0.0? 1.0:0.0);
+    deltasMatrixNew[x*batchSize + y] = temp * (outputs[x*batchSize+y] > 0.0? 1.0:0.0);
 }
 
 __kernel void Update_Weights_Buffers(global float* deltasMatrix, global float* outputsMatrix, global float* weightsMatrix
-,const int deltasDim, const int outputsDim, const float learning_rate)
+,const int deltasDim, const int outputsDim, const int batchSize, const float learning_rate)
 {
-    printf("Update_Weights_Buffers");
+    //printf("Update_Weights_Buffers");
     const int x = get_global_id(0); //the row specification, from 0 to deltasDim-1
     const int y = get_global_id(1); //the column specification, from 0 to outputsDim-1
+    float A,B, temp=0;
+    //printf("start %d %d \n", x, y);
     
-    printf("start %d %d \n", x, y);
-    
-    const float A = deltasMatrix[x];
-    const float B = outputsMatrix[y];
-    printf("id is %d %d, values are %f %f \n ", x, y, A, B );
-    const float temp=A*B;
-    printf("id is %d %d, temp value is %f \n \n \n ", x, y, temp);
+    for (int p = 0 ; p < batchSize ; p++){
+        A = deltasMatrix[x*batchSize+p];
+        B = outputsMatrix[y*batchSize+p];
+        temp+=A*B;
+    }
+    temp = temp / (float)batchSize;
 
+    //printf("id is %d %d, pre update weight  is %f", x, y, weightsMatrix[x*outputsDim+y]);
     weightsMatrix[x*outputsDim + y] = weightsMatrix[x*outputsDim + y] - learning_rate * temp;
-    printf("id is %d %d, final value is %f \n \n \n ", x, y, weightsMatrix[x*outputsDim+y]);
+    //printf("id is %d %d, update value is %f\n", x, y, temp);
+    //printf("id is %d %d, post update weight is %f", x, y, weightsMatrix[x*outputsDim+y]);
 }
