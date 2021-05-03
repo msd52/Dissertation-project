@@ -152,6 +152,7 @@ struct ocl_args_d_t
     cl_device_id     device;            // hold the selected device handler
     cl_command_queue commandQueue;      // hold the commands-queue handler
     cl_program       program;           // hold the program handler
+    cl_program       programSimple;           // hold the program handler for naive GPU
     cl_kernel        kernel;            // hold the kernel handler
     float            platformVersion;   // hold the OpenCL platform version (default 1.2)
     float            deviceVersion;     // hold the OpenCL device version (default. 1.2)
@@ -168,6 +169,7 @@ ocl_args_d_t::ocl_args_d_t() :
     device(NULL),
     commandQueue(NULL),
     program(NULL),
+    programSimple(NULL),
     kernel(NULL),
     platformVersion(OPENCL_VERSION_1_2),
     deviceVersion(OPENCL_VERSION_1_2),
@@ -192,17 +194,25 @@ ocl_args_d_t::ocl_args_d_t() :
 {
     cl_int err = CL_SUCCESS;
 
-    /*if (kernel)
+    if (kernel)
     {
         err = clReleaseKernel(kernel);
         if (CL_SUCCESS != err)
         {
             LogError("Error: clReleaseKernel returned '%s'.\n", TranslateOpenCLError(err));
         }
-    }*/
+    }
     if (program)
     {
         err = clReleaseProgram(program);
+        if (CL_SUCCESS != err)
+        {
+            LogError("Error: clReleaseProgram returned '%s'.\n", TranslateOpenCLError(err));
+        }
+    }
+    if (programSimple)
+    {
+        err = clReleaseProgram(programSimple);
         if (CL_SUCCESS != err)
         {
             LogError("Error: clReleaseProgram returned '%s'.\n", TranslateOpenCLError(err));
@@ -697,8 +707,16 @@ int CreateAndBuildProgram(ocl_args_d_t *ocl)
     // Upload the OpenCL C source code from the input file to source
     // The size of the C program is returned in sourceSize
     char* source = NULL;
-    size_t src_size = 0;
-    err = ReadSourceFromFile("kernel1.cl", &source, &src_size);
+    size_t srcSize = 0;
+    err = ReadSourceFromFile("kernel1.cl", &source, &srcSize);
+    if (CL_SUCCESS != err)
+    {
+        LogError("Error: ReadSourceFromFile returned %s.\n", TranslateOpenCLError(err));
+        goto Finish;
+    }
+    char* sourceSimple = NULL;
+    size_t srcSizeSimple = 0;
+    err = ReadSourceFromFile("kernel1.cl", &sourceSimple, &srcSizeSimple);
     if (CL_SUCCESS != err)
     {
         LogError("Error: ReadSourceFromFile returned %s.\n", TranslateOpenCLError(err));
@@ -706,7 +724,13 @@ int CreateAndBuildProgram(ocl_args_d_t *ocl)
     }
 
     // And now after you obtained a regular C string call clCreateProgramWithSource to create OpenCL program object.
-    ocl->program = clCreateProgramWithSource(ocl->context, 1, (const char**)&source, &src_size, &err);
+    ocl->program = clCreateProgramWithSource(ocl->context, 1, (const char**)&source, &srcSizeSimple, &err);
+    if (CL_SUCCESS != err)
+    {
+        LogError("Error: clCreateProgramWithSource returned %s.\n", TranslateOpenCLError(err));
+        goto Finish;
+    }
+    ocl->programSimple = clCreateProgramWithSource(ocl->context, 1, (const char**)&sourceSimple, &srcSizeSimple, &err);
     if (CL_SUCCESS != err)
     {
         LogError("Error: clCreateProgramWithSource returned %s.\n", TranslateOpenCLError(err));
@@ -738,79 +762,9 @@ int CreateAndBuildProgram(ocl_args_d_t *ocl)
             LogError("Error happened during the build of OpenCL program.\nBuild log:%s", &build_log[0]);
         }
     }
-
-Finish:
-    if (source)
-    {
-        delete[] source;
-        source = NULL;
-    }
-
-    return err;
-}
-
-/*int mCreateAndBuildProgram(ocl_args_d_t* ocl)
-{
-    cl_int err = CL_SUCCESS;
-
-    // Upload the OpenCL C source code from the input file to source
-    // The size of the C program is returned in sourceSize
-    char* sourceMain = NULL;
-    char* sourceMaths = NULL;
-    size_t srcSizeMain = 0;
-    size_t srcSizeMaths = 0;
-    err = ReadSourceFromFile("Template.cl", &sourceMain, &srcSizeMain);
+    err = clBuildProgram(ocl->programSimple, 1, &ocl->device, "", NULL, NULL);
     if (CL_SUCCESS != err)
     {
-        LogError("Error: ReadSourceFromFile returned %s.\n", TranslateOpenCLError(err));
-        goto Finish;
-    }
-    std::cout << "we got this far -2" << '\n';
-    err = ReadSourceFromFile("math.h", &sourceMaths, &srcSizeMaths);
-    if (CL_SUCCESS != err)
-    {
-        LogError("Error: ReadSourceFromFile returned %s.\n", TranslateOpenCLError(err));
-        goto Finish;
-    }
-    std::cout << "we got this far -1" << '\n';
-    // And now after you obtained a regular C string call clCreateProgramWithSource to create OpenCL program object.
-    
-    ocl->program = clCreateProgramWithSource(ocl->context, 1, (const char**)&sourceMain, &srcSizeMain, &err);
-    if (CL_SUCCESS != err)
-    {
-        LogError("Error: clCreateProgramWithSource returned %s.\n", TranslateOpenCLError(err));
-        goto Finish;
-    }
-    cl_program mathsProg = clCreateProgramWithSource(ocl->context, 1, (const char**)&sourceMaths, &srcSizeMaths, &err);
-    if (CL_SUCCESS != err)
-    {
-        LogError("Error: clCreateProgramWithSource returned %s.\n", TranslateOpenCLError(err));
-        goto Finish;
-    }
-
-
-    // Build the program
-    // During creation a program is not built. You need to explicitly call build function.
-    // Here you just use create-build sequence,
-    // but there are also other possibilities when program consist of several parts,
-    // some of which are libraries, and you may want to consider using clCompileProgram and clLinkProgram as
-    // alternatives.
-    //err = clLinkProgram();
-    cl_program input_headers[1] = {mathsProg};
-    char* input_header_names[1] = { "math.h" };
-    std::cout << "we got this far 0" << '\n';
-    err = clCompileProgram(ocl->program,
-        1, &ocl->device, // num_devices & device_list
-        NULL,    // compile_options
-        1,       // num_input_headers
-        input_headers,
-        input_header_names,
-        NULL, NULL);
-    std::cout << "we got this far 1" << '\n';
-    //err = clBuildProgram(ocl->program, 1, &ocl->device, "", NULL, NULL);
-    if (CL_SUCCESS != err)
-    {
-        std::cout << "we got this far 2" << '\n';
         LogError("Error: clBuildProgram() for source program returned %s.\n", TranslateOpenCLError(err));
 
         // In case of error print the build log to the standard output
@@ -819,25 +773,28 @@ Finish:
         if (err == CL_BUILD_PROGRAM_FAILURE)
         {
             size_t log_size = 0;
-            clGetProgramBuildInfo(ocl->program, ocl->device, CL_PROGRAM_BUILD_LOG, 0, NULL, &log_size);
+            clGetProgramBuildInfo(ocl->programSimple, ocl->device, CL_PROGRAM_BUILD_LOG, 0, NULL, &log_size);
 
             std::vector<char> build_log(log_size);
-            clGetProgramBuildInfo(ocl->program, ocl->device, CL_PROGRAM_BUILD_LOG, log_size, &build_log[0], NULL);
+            clGetProgramBuildInfo(ocl->programSimple, ocl->device, CL_PROGRAM_BUILD_LOG, log_size, &build_log[0], NULL);
 
             LogError("Error happened during the build of OpenCL program.\nBuild log:%s", &build_log[0]);
         }
     }
-    std::cout << "we got this far 3" << '\n';
 Finish:
-    if (sourceMain)
+    if (source)
     {
-        delete[] sourceMain;
-        sourceMain = NULL;
+        delete[] source;
+        source = NULL;
+    }    
+    if (sourceSimple)
+    {
+        delete[] sourceSimple;
+        sourceSimple = NULL;
     }
 
     return err;
-}*/
-
+}
 
 /*
  * Set kernel arguments
@@ -999,12 +956,11 @@ cl_float MSECostFunction(cl_float* correctOutput, cl_float* networkOutput, cl_ui
     return avg;
 }
 
-cl_float AccuracyFunction(cl_float* correctOutput, cl_float* networkOutput, cl_uint batchSize) {
+cl_float AccuracyFunction(cl_float* correctOutput, int* choices, cl_uint batchSize) {
     
-    int correctClass, total=0;
+    int total=0;
     for (int x = 0; x < batchSize; ++x) {
-        correctClass= (int)correctOutput[x];
-        if (networkOutput[batchSize * correctClass + x] > 0.5) {
+        if ((int)correctOutput[x] == choices[x] ) {
             total += 1;
         }
         //std::cout << "network output for " << x << "th example is " << networkOutput[batchSize * correctClass + x] << '\n';
@@ -1375,7 +1331,8 @@ cl_uint initializeparamsClassifier(ocl_args_d_t* ocl, cl_mem** buffersWeightsArr
     }
 }
 
-cl_uint forwardpassClassifier(ocl_args_d_t* ocl, cl_mem* buffersWeightsArray, cl_mem* buffersOutsArray, cl_mem* bufferInputArray, int dimensions[], int* ActivationFunctions, cl_kernel* activationFunctionKernels, int batchSize, int layers) {
+cl_uint forwardpassClassifier(ocl_args_d_t* ocl, cl_mem* buffersWeightsArray, cl_mem* buffersOutsArray, cl_mem* bufferInputArray, 
+    int dimensions[], int* ActivationFunctions, cl_kernel* activationFunctionKernels, cl_kernel* activationFunctionKernelsSimple, int batchSize, int layers) {
 
     std::cout << "In forwardprop \n";
     ocl->dstMem = *bufferInputArray;
@@ -1392,7 +1349,13 @@ cl_uint forwardpassClassifier(ocl_args_d_t* ocl, cl_mem* buffersWeightsArray, cl
         // Program consists of kernels.
         // Each kernel can be called (enqueued) from the host part of OpenCL application.
         // To call the kernel, you need to create it from existing program.
-        ocl->kernel = activationFunctionKernels[ActivationFunctions[x]];
+        if (mDim % 16 == 0 && nDim % 16 == 0) {
+            ocl->kernel = activationFunctionKernels[ActivationFunctions[x]];
+
+        }
+        else {
+            ocl->kernel = activationFunctionKernelsSimple[ActivationFunctions[x]];
+        }
 
         // Passing arguments into OpenCL kernel.
         if (CL_SUCCESS != mSetKernelArguments(ocl, NULL, mDim, pDim, nDim, 0.0, 1))
@@ -1408,8 +1371,10 @@ cl_uint forwardpassClassifier(ocl_args_d_t* ocl, cl_mem* buffersWeightsArray, cl
     }
 }
 
+
+
 cl_uint backpropClassifier(ocl_args_d_t* ocl, cl_mem* buffersWeightsArray, cl_mem* buffersOutsArray, cl_mem* buffersDeltasArray, cl_mem* bufferInputArray, int dimensions[],
-    int* ActivationFunctions, cl_kernel* activationFunctionDeltaKernels, cl_float* correctOutput, cl_float* costs, int iter, int batchSize, int layers, int classes) {
+    int* ActivationFunctions, cl_kernel* activationFunctionDeltaKernels, cl_kernel* activationFunctionDeltaKernelsSimple, cl_float* correctOutput, cl_float* costs, int iter, int batchSize, int layers, int classes) {
 
     std::cout << "In backprop for iter " << iter << " \n";
     cl_int err = CL_SUCCESS;
@@ -1418,6 +1383,9 @@ cl_uint backpropClassifier(ocl_args_d_t* ocl, cl_mem* buffersWeightsArray, cl_me
     cl_float* preSoftmaxOutputs = (cl_float*)_aligned_malloc(optimizedSizeNetworkOutput, 4096);
     cl_float* softmaxOutputs = (cl_float*)_aligned_malloc(optimizedSizeNetworkOutput, 4096);
     cl_float* deltas = (cl_float*)_aligned_malloc(optimizedSizeNetworkOutput, 4096);
+
+    cl_uint optimizedSizeNetworkOutput2 = ((sizeof(int) * batchSize - 1) / 64 + 1) * 64;
+    int* choices = (int*)_aligned_malloc(optimizedSizeNetworkOutput2, 4096);
 
     err = clEnqueueReadBuffer(ocl->commandQueue, ocl->dstMem, true, 0, sizeof(cl_float) * classes * batchSize, preSoftmaxOutputs, 0, NULL, NULL);
     if (CL_SUCCESS != err)
@@ -1428,23 +1396,26 @@ cl_uint backpropClassifier(ocl_args_d_t* ocl, cl_mem* buffersWeightsArray, cl_me
     int idx, correctClass;
     cl_float maxval, temp;
     for (int i = 0; i < batchSize; ++i) {
-        std::cout << "Entering calculation for batch element " << i << "\n";
+        //std::cout << "Entering calculation for batch element " << i << "\n";
         idx = 0;
         temp = 0.0f;
         maxval = -FLT_MAX;
         correctClass = (int)correctOutput[i];
         for (int j = 0; j < classes; ++j) {
-            std::cout << "presoftmax for " << j << " th class and batch item " << i << " is " << preSoftmaxOutputs[j * batchSize + i] << '\n';
+            //std::cout << "presoftmax for " << j << " th class and batch item " << i << " is " << preSoftmaxOutputs[j * batchSize + i] << '\n';
             if (preSoftmaxOutputs[j * batchSize + i] > maxval) {
                 idx = j;
                 maxval = preSoftmaxOutputs[j * batchSize + i];
             }
         }
-        std::cout << "Predicted class was " << idx << '\n';
-        std::cout << "Correct class was " << correctClass << '\n';
+        if (iter % 20 == 0 && iter>0) {
+            std::cout << "Predicted class was " << idx << '\n';
+            std::cout << "Correct class was " << correctClass << '\n';
+        }
+        choices[i] = idx;
         for (int j = 0; j < classes; ++j) {
             preSoftmaxOutputs[j * batchSize + i] = preSoftmaxOutputs[j * batchSize + i] - maxval;
-            std::cout << "presoft recentered for class "<<j<<" is " << preSoftmaxOutputs[j * batchSize + i] << "\n";
+            //std::cout << "presoft recentered for class "<<j<<" is " << preSoftmaxOutputs[j * batchSize + i] << "\n";
             softmaxOutputs[j * batchSize + i] = exp(preSoftmaxOutputs[j * batchSize + i]);
             temp += exp(preSoftmaxOutputs[j * batchSize + i]);
         }
@@ -1468,10 +1439,8 @@ cl_uint backpropClassifier(ocl_args_d_t* ocl, cl_mem* buffersWeightsArray, cl_me
     }
 
     //Here I am actually returning the accuracy
-    costs[iter] = AccuracyFunction(correctOutput, softmaxOutputs, batchSize);
+    costs[iter] = AccuracyFunction(correctOutput, choices, batchSize);
 
-
-    
     err = clEnqueueWriteBuffer(ocl->commandQueue, buffersDeltasArray[layers - 1], true, 0, sizeof(cl_float) * batchSize*classes, deltas, 0, NULL, NULL);
     if (CL_SUCCESS != err)
     {
@@ -1491,17 +1460,19 @@ cl_uint backpropClassifier(ocl_args_d_t* ocl, cl_mem* buffersWeightsArray, cl_me
         ocl->dstMem = buffersDeltasArray[x - 1];
         outputs = buffersOutsArray[x - 1];
 
-        // Program consists of kernels.
-        // Each kernel can be called (enqueued) from the host part of OpenCL application.
-        // To call the kernel, you need to create it from existing program.
-        ocl->kernel = activationFunctionDeltaKernels[ActivationFunctions[x]];
-        // Passing arguments into OpenCL kernel.
+        if (mDim % 16 == 0 && nDim % 16 == 0) {
+            ocl->kernel = activationFunctionDeltaKernels[ActivationFunctions[x]];
+
+        }
+        else {
+            ocl->kernel = activationFunctionDeltaKernelsSimple[ActivationFunctions[x]];
+        }
+
         if (CL_SUCCESS != mSetKernelArguments(ocl, &outputs, mDim, pDim, nDim, 0.0, 2))
         {
             return -1;
         }
 
-        // Execute (enqueue) the kernel
         if (CL_SUCCESS != mExecuteMultiplyKernel(ocl, mDim, nDim)) //thankfully, the same function works for our Multiply_Deltas kernel too
         {
             return -1;
@@ -1525,11 +1496,21 @@ cl_uint backpropClassifier(ocl_args_d_t* ocl, cl_mem* buffersWeightsArray, cl_me
             ocl->srcB = *bufferInputArray;
         }
 
-        ocl->kernel = clCreateKernel(ocl->program, "Update_Weights_Buffers", &err);
-        if (CL_SUCCESS != err)
-        {
-            LogError("Error: clCreateKernel returned %s\n", TranslateOpenCLError(err));
-            return -1;
+        if (mDim % 16 == 0 && nDim % 16 == 0) {
+            ocl->kernel = clCreateKernel(ocl->program, "Update_Weights_Buffers", &err);
+            if (CL_SUCCESS != err)
+            {
+                LogError("Error: clCreateKernel returned %s\n", TranslateOpenCLError(err));
+                return -1;
+            }
+        }
+        else {
+            ocl->kernel = clCreateKernel(ocl->programSimple, "Update_Weights_Buffers", &err);
+            if (CL_SUCCESS != err)
+            {
+                LogError("Error: clCreateKernel returned %s\n", TranslateOpenCLError(err));
+                return -1;
+            }
         }
 
         if (CL_SUCCESS != mSetKernelArguments(ocl, NULL, mDim, pDim, nDim, learning_rate, 3))
@@ -1542,6 +1523,133 @@ cl_uint backpropClassifier(ocl_args_d_t* ocl, cl_mem* buffersWeightsArray, cl_me
             return -1;
         }
     }
+}
+
+cl_uint validationClassifier(ocl_args_d_t* ocl, cl_mem* buffersWeightsArray, cl_mem* buffersOutsArray, cl_mem* bufferInputArray, int dimensions[],
+    int* ActivationFunctions, cl_kernel* activationFunctionKernels, cl_kernel* activationFunctionKernelsSimple, int layers, int classes, uchar** valDataset, uchar* valLabels, int numValImages ) {
+    
+    std::cout << "In validation \n";
+
+    cl_int err = CL_SUCCESS;
+
+    cl_uint optimizedSizeIn = ((sizeof(cl_float) * dimensions[0] * numValImages - 1) / 64 + 1) * 64;
+    cl_float* inArray = (cl_float*)_aligned_malloc(optimizedSizeIn, 4096); //array of network input
+
+    for (int i = 0; i < numValImages; ++i) {
+        for (int j = 0; j < dimensions[0]; ++j) {
+            inArray[j * numValImages + i] = (cl_float)valDataset[i][j];
+        }
+    }
+    cl_uint optimizedSizeOut = ((sizeof(cl_float) * classes * numValImages - 1) / 64 + 1) * 64;
+    cl_float* correctOutput = (cl_float*)_aligned_malloc(optimizedSizeOut, 4096); //array of network ground truth
+
+    for (int i = 0; i < numValImages; ++i) {
+        correctOutput[i] = (cl_float)valLabels[i];
+    }
+
+
+    if (NULL == inArray || NULL == correctOutput)
+    {
+        LogError("Error: _aligned_malloc failed to allocate buffers.\n");
+        return -1;
+    }
+
+    *bufferInputArray = clCreateBuffer(ocl->context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(cl_float) * dimensions[0] * numValImages, inArray, &err);
+    if (CL_SUCCESS != err)
+    {
+        LogError("Error: creating input buffer returned %s\n", TranslateOpenCLError(err));
+        return err;
+    }
+
+
+    int mDim, pDim, nDim = numValImages;
+    for (cl_uint x = 0; x < layers; ++x) {
+        mDim = dimensions[x + 1];
+        pDim = dimensions[x];
+
+        (buffersOutsArray)[x] = clCreateBuffer(ocl->context, CL_MEM_READ_WRITE, sizeof(cl_float) * mDim * nDim, NULL, &err);
+        if (CL_SUCCESS != err)
+        {
+            LogError("Error: clCreateImage for srcA returned %s\n", TranslateOpenCLError(err));
+            return err;
+        }
+    }
+
+    ocl->dstMem = *bufferInputArray;
+    for (int x = 0; x < layers; ++x) {
+
+        mDim = dimensions[x + 1];
+        pDim = dimensions[x];
+
+        ocl->srcA = buffersWeightsArray[x];
+        ocl->srcB = ocl->dstMem;
+        ocl->dstMem = buffersOutsArray[x];
+
+        // Program consists of kernels.
+        // Each kernel can be called (enqueued) from the host part of OpenCL application.
+        // To call the kernel, you need to create it from existing program.
+        if (mDim % 16 == 0 && nDim % 16 == 0) {
+            ocl->kernel = activationFunctionKernels[ActivationFunctions[x]];
+
+        }
+        else {
+            ocl->kernel = activationFunctionKernelsSimple[ActivationFunctions[x]];
+        }
+
+        // Passing arguments into OpenCL kernel.
+        if (CL_SUCCESS != mSetKernelArguments(ocl, NULL, mDim, pDim, nDim, 0.0, 1))
+        {
+            return -1;
+        }
+        if (CL_SUCCESS != mExecuteMultiplyKernel(ocl, mDim, nDim))
+        {
+            return -1;
+        }
+    }
+
+    cl_uint optimizedSizeNetworkOutput = ((sizeof(cl_float) * numValImages * classes - 1) / 64 + 1) * 64;
+    cl_float* preSoftmaxOutputs = (cl_float*)_aligned_malloc(optimizedSizeNetworkOutput, 4096);
+    cl_float* softmaxOutputs = (cl_float*)_aligned_malloc(optimizedSizeNetworkOutput, 4096);
+
+    cl_uint optimizedSizeNetworkOutput2 = ((sizeof(int) * numValImages - 1) / 64 + 1) * 64;
+    int* choices = (int*)_aligned_malloc(optimizedSizeNetworkOutput2, 4096);
+
+    err = clEnqueueReadBuffer(ocl->commandQueue, ocl->dstMem, true, 0, sizeof(cl_float) * classes * numValImages, preSoftmaxOutputs, 0, NULL, NULL);
+    if (CL_SUCCESS != err)
+    {
+        LogError("Error: clEnqueueReadBuffer returned %s\n", TranslateOpenCLError(err));
+    }
+
+    int idx, correctClass;
+    cl_float maxval, temp;
+    for (int i = 0; i < numValImages; ++i) {
+        //std::cout << "Entering calculation for batch element " << i << "\n";
+        idx = 0;
+        temp = 0.0f;
+        maxval = -FLT_MAX;
+        correctClass = (int)correctOutput[i];
+        for (int j = 0; j < classes; ++j) {
+            //std::cout << "presoftmax for " << j << " th class and batch item " << i << " is " << preSoftmaxOutputs[j * batchSize + i] << '\n';
+            if (preSoftmaxOutputs[j * numValImages + i] > maxval) {
+                idx = j;
+                maxval = preSoftmaxOutputs[j * numValImages + i];
+            }
+        }
+        choices[i] = idx;
+        for (int j = 0; j < classes; ++j) {
+            preSoftmaxOutputs[j * numValImages + i] = preSoftmaxOutputs[j * numValImages + i] - maxval;
+            //std::cout << "presoft recentered for class "<<j<<" is " << preSoftmaxOutputs[j * batchSize + i] << "\n";
+            softmaxOutputs[j * numValImages + i] = exp(preSoftmaxOutputs[j * numValImages + i]);
+            temp += exp(preSoftmaxOutputs[j * numValImages + i]);
+        }
+        for (int j = 0; j < classes; ++j) {
+            softmaxOutputs[j * numValImages + i] = softmaxOutputs[j * numValImages + i] / temp;
+        }
+    }
+
+    //Here I am actually returning the accuracy
+    cl_float accuracy = AccuracyFunction(correctOutput, choices, numValImages);
+    std::cout << "Validation set accuracy is " << accuracy << '\n';
 }
 
 cl_uint initializeparams(ocl_args_d_t* ocl, cl_mem** buffersWeightsArray, cl_mem** buffersOutsArray, cl_mem** buffersDeltasArray, cl_mem* bufferInputArray, cl_float** costs,
@@ -2429,6 +2537,12 @@ uchar* read_mnist_labels(std::string full_path, int& number_of_labels) {
     }
 }
 
+//cl_uint minibatchGD() {
+//
+//
+//
+//}
+
 int _tmain(int argc, TCHAR* argv[])
 {
     cl_int err;
@@ -2457,9 +2571,9 @@ int _tmain(int argc, TCHAR* argv[])
     // both nodes (as with deltas) and layers. This means I can just replace the 3rd loop with one
     //clEnqueueNDRangeKernel invocation (haven't done this yet, but will in the future).
 
-    const int batchSize = 16;
-    const int layers = 1; //We don't count input as a layer
-    int dimAr[layers + 1] = {784, 10}; //last layer should always be set to 1 for regression
+    const int batchSize = 256;
+    const int layers = 2; //We don't count input as a layer
+    int dimAr[layers + 1] = {784, 1024, 10}; //last layer should always be set to 1 for regression
     //cl_float correctOutput[batchSize] = { 1.0,2.0,3.0,4.0,5.0,6.0,7.0,-77.0,-8.0,8.5,9.2,-10.0}; //The desired output
     const int numAF = 4; //num of activation functions
     char* activationFunctionKernelNames[numAF] = { "Multiply_Buffer_Identity",
@@ -2467,11 +2581,12 @@ int _tmain(int argc, TCHAR* argv[])
     char* activationFunctionDeltaKernelNames[numAF] = { "Multiply_Deltas_Buffers_Identity",
     "Multiply_Deltas_Buffers_Sigmoid","Multiply_Deltas_Buffers_Tanh","Multiply_Deltas_Buffers_ReLU" };
     cl_kernel activationFunctionKernels[numAF], activationFunctionDeltaKernels[numAF];
+    cl_kernel activationFunctionKernelsSimple[numAF], activationFunctionDeltaKernelsSimple[numAF];
 
     //for (int x = 0; x < batchSize; ++x) {
     //    std::cout << "Correct output term "<<x<<" is"<< correctOutput[x] << '\n';
     //}
-    int activationFunctions[layers] = {0}; // 0 for identity, 1 for tanh, 2 for sigmoid, 3 for ReLU
+    int activationFunctions[layers] = {3,0}; // 0 for identity, 1 for tanh, 2 for sigmoid, 3 for ReLU
 
     //initialize Open CL objects (context, queue, etc.)
     if (CL_SUCCESS != SetupOpenCL(&ocl, deviceType))
@@ -2499,18 +2614,32 @@ int _tmain(int argc, TCHAR* argv[])
             LogError("Error: clCreateKernel returned %s\n", TranslateOpenCLError(err));
             return -1;
         }
+        activationFunctionKernelsSimple[x] = clCreateKernel(ocl.programSimple, activationFunctionKernelNames[x], &err);
+        if (CL_SUCCESS != err)
+        {
+            LogError("Error: clCreateKernel returned %s\n", TranslateOpenCLError(err));
+            return -1;
+        }
+        activationFunctionDeltaKernelsSimple[x] = clCreateKernel(ocl.programSimple, activationFunctionDeltaKernelNames[x], &err);
+        if (CL_SUCCESS != err)
+        {
+            LogError("Error: clCreateKernel returned %s\n", TranslateOpenCLError(err));
+            return -1;
+        }
     }
 
-    int image_size, number_of_images, number_of_labels;
-    uchar** dataset = read_mnist_images("C:\\Users\\george cabon x1\\source\\repos\\GPUOpenCLProjectforWindows2\\GPUOpenCLProjectforWindows2\\MNIST\\train-images.idx3-ubyte", number_of_images, image_size);
-    uchar* labels = read_mnist_labels("C:\\Users\\george cabon x1\\source\\repos\\GPUOpenCLProjectforWindows2\\GPUOpenCLProjectforWindows2\\MNIST\\train-labels.idx1-ubyte", number_of_labels);
+    int trainImageSize, valImageSize, numTrainImages, numTrainLabels, numValImages, numValLabels;
+    uchar** trainingDataset = read_mnist_images("C:\\Users\\george cabon x1\\source\\repos\\GPUOpenCLProjectforWindows2\\GPUOpenCLProjectforWindows2\\MNIST\\train-images.idx3-ubyte", numTrainImages, trainImageSize);
+    uchar* trainingLabels = read_mnist_labels("C:\\Users\\george cabon x1\\source\\repos\\GPUOpenCLProjectforWindows2\\GPUOpenCLProjectforWindows2\\MNIST\\train-labels.idx1-ubyte", numTrainLabels);
+    
+    uchar** valDataset = read_mnist_images("C:\\Users\\george cabon x1\\source\\repos\\GPUOpenCLProjectforWindows2\\GPUOpenCLProjectforWindows2\\MNIST\\t10k-images.idx3-ubyte", numValImages, valImageSize);
+    uchar* valLabels = read_mnist_labels("C:\\Users\\george cabon x1\\source\\repos\\GPUOpenCLProjectforWindows2\\GPUOpenCLProjectforWindows2\\MNIST\\t10k-labels.idx1-ubyte", numValLabels);
 
-
-    std::cout << "There are " << number_of_images << " with size " << image_size << '\n';
-    std::cout << "First image label is " << (cl_float)labels[0] << '\n';
+    std::cout << "There are " << numTrainImages << " with size " << valImageSize << '\n';
+    std::cout << "First image label is " << (cl_float)trainingLabels[0] << '\n';
     for (int i = 0; i < 28; ++i) {
         for (int j = 0; j < 28; ++j) {
-            if (dataset[0][28 * i + j] > 100) {
+            if (trainingDataset[0][28 * i + j] > 100) {
                 std::cout << 1;
             }
             else {
@@ -2520,7 +2649,7 @@ int _tmain(int argc, TCHAR* argv[])
         std::cout << '\n';
     }
 
-    int iterations = 18;
+    int epochs = 30;
     int classes = 10;
 
     //MAIN LOOP
@@ -2530,19 +2659,23 @@ int _tmain(int argc, TCHAR* argv[])
     cl_float* correctOutput;
     cl_float* costs;
 
-    initializeparamsClassifier(&ocl, &weightBuffers, &outputBuffers, &deltaBuffers, &inputBuffer, &costs, dimAr, batchSize, iterations, layers, &correctOutput, dataset, labels);
+    initializeparamsClassifier(&ocl, &weightBuffers, &outputBuffers, &deltaBuffers, &inputBuffer, &costs, dimAr, batchSize, epochs, layers, &correctOutput, trainingDataset, trainingLabels);
 
-    for (int iter = 0; iter < iterations; ++iter) {
-        std::cout << "iteration "<<iter<<" here \n";
+    for (int epoch = 0; epoch < epochs; ++epoch) {
+        std::cout << "epoch "<<epoch<<" hereeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee \n";
         std::cout << "ENTERING OPENCL FORWARD" << "\n";
-        forwardpassClassifier(&ocl, weightBuffers, outputBuffers, &inputBuffer, dimAr, activationFunctions, activationFunctionKernels, batchSize, layers);
+        forwardpassClassifier(&ocl, weightBuffers, outputBuffers, &inputBuffer, dimAr, activationFunctions, activationFunctionKernels, activationFunctionKernelsSimple, batchSize, layers);
         std::cout << "ENTERING OPENCL BACKWARD" << "\n";
-        backpropClassifier(&ocl, weightBuffers, outputBuffers, deltaBuffers, &inputBuffer, dimAr, activationFunctions, activationFunctionDeltaKernels, correctOutput, costs, iter, batchSize, layers, classes);
+        backpropClassifier(&ocl, weightBuffers, outputBuffers, deltaBuffers, &inputBuffer, dimAr, activationFunctions, activationFunctionDeltaKernels, activationFunctionDeltaKernelsSimple, correctOutput, costs, epoch, batchSize, layers, classes);
     }
 
-    for (int i = 0; i < iterations; i++) {
+    for (int i = 0; i < epochs; i++) {
         std::cout << costs[i] << '\n';
     }
+
+    validationClassifier(&ocl, weightBuffers, outputBuffers, &inputBuffer, dimAr, activationFunctions, activationFunctionKernels,
+        activationFunctionKernelsSimple, layers, classes, valDataset, valLabels, numValImages);
+
     std::cout << "finally done";
     system("pause");
 

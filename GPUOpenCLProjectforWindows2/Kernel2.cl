@@ -392,5 +392,5 @@ __kernel void Update_Weights_Buffers(global float* matrixA, global float* matrix
     }
  
     // Store the final result in C
-    matrixC[globalCol + globalRow*nDim] = matrixC[globalCol + globalRow*nDim] - offset * acc;
+    matrixC[globalCol + globalRow*nDim] = matrixC[globalCol + globalRow*nDim] - clamp(offset*acc/(float)pDim,-0.02f,0.02f);
 }

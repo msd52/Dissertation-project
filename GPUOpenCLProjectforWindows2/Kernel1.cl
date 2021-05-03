@@ -451,10 +451,10 @@ __kernel void Update_Weights_Buffers(global float* deltasMatrix, global float* o
         //printf("id is %d %d, values are %f %f \n ", x, y, A, B );
         temp+=A*B;
     }
-    temp = temp / (float)batchSize;
+    temp = clamp(learning_rate*temp / (float)batchSize,-0.02f,0.02f);
 
-    //printf("id is %d %d, pre update weight  is %f", x, y, weightsMatrix[x*outputsDim+y]);
-    weightsMatrix[x*outputsDim + y] = weightsMatrix[x*outputsDim + y] - learning_rate * temp;
+    //printf("id is %d %d, pre update weight  is %f \n", x, y, temp);
+    weightsMatrix[x*outputsDim + y] = weightsMatrix[x*outputsDim + y] - temp;
     //printf("id is %d %d, update value is %f\n", x, y, temp);
     //printf("id is %d %d, post update weight is %f", x, y, weightsMatrix[x*outputsDim+y]);
 }
