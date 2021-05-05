@@ -1,21 +1,19 @@
 //File containing implementation with basic cache blocking using local memory
 
 #define TS 16
-#define WPT 8
-#define RTS 2
-#define WPTM 4
-#define WPTN 4
 
 __kernel void Multiply_Buffer_Identity(global float* matrixA, global float* matrixB, global float* matrixC,
 const int mDim, const int pDim, const int nDim)
 {
-
+   
     // Thread identifiers
     const int row = get_local_id(0); // Local row ID (max: TS)
     const int col = get_local_id(1); // Local col ID (max: TS)
     const int globalRow = TS*get_group_id(0) + row; // Row ID of C (0..M)
     const int globalCol = TS*get_group_id(1) + col; // Col ID of C (0..N)
-
+    if (globalRow==0 && globalCol==0){
+        printf("In MUL BUFF ID 2");
+    }
 
     // Local memory to fit a tile of TS*TS elements of A and B
     __local float Asub[TS][TS];
@@ -39,6 +37,7 @@ const int mDim, const int pDim, const int nDim)
  
         // Perform the computation for a single tile
         for (int k=0; k<TS; k++) {
+            //printf("%f and %f for %d and %d \n", Asub[row][k] , Bsub[k][col], globalRow, globalCol);
             acc += Asub[row][k] * Bsub[k][col];
         }
  
@@ -145,7 +144,10 @@ const int mDim, const int pDim, const int nDim)
     const int col = get_local_id(1); // Local col ID (max: TS)
     const int globalRow = TS*get_group_id(0) + row; // Row ID of C (0..M)
     const int globalCol = TS*get_group_id(1) + col; // Col ID of C (0..N)
- 
+    if (globalRow==0 && globalCol==0){
+        printf("In MUL BUFF RELU 2");
+    }
+
     // Local memory to fit a tile of TS*TS elements of A and B
     __local float Asub[TS][TS];
     __local float Bsub[TS][TS];
@@ -168,6 +170,7 @@ const int mDim, const int pDim, const int nDim)
  
         // Perform the computation for a single tile
         for (int k=0; k<TS; k++) {
+            //printf("%f and %f for %d and %d \n", Asub[row][k] , Bsub[k][col], globalRow, globalCol);
             acc += Asub[row][k] * Bsub[k][col];
         }
  
@@ -187,7 +190,9 @@ const int mDim, const int pDim, const int nDim, global float* matrixD)
     const int col = get_local_id(1); // Local col ID (max: TS)
     const int globalRow = TS*get_group_id(0) + row; // Row ID of C (0..M)
     const int globalCol = TS*get_group_id(1) + col; // Col ID of C (0..N)
-
+    if (globalRow==0 && globalCol==0){
+        printf("In DELTA MUL BUFF ID 2");
+    }
 
     // Local memory to fit a tile of TS*TS elements of A and B
     __local float Asub[TS][TS];
@@ -212,6 +217,7 @@ const int mDim, const int pDim, const int nDim, global float* matrixD)
  
         // Perform the computation for a single tile
         for (int k=0; k<TS; k++) {
+            //printf("%f and %f for %d and %d \n", Asub[row][k] , Bsub[k][col], globalRow, globalCol);
             acc += Asub[row][k] * Bsub[k][col];
         }
  
@@ -220,7 +226,7 @@ const int mDim, const int pDim, const int nDim, global float* matrixD)
     }
  
     // Store the final result in C
-    matrixC[globalCol + globalRow*nDim] = acc;
+    matrixC[globalCol + globalRow*nDim] = clamp((float)acc,-0.05f,0.05f);
 }
 
 
@@ -263,7 +269,7 @@ const int mDim, const int pDim, const int nDim, global float* matrixD)
     }
  
     // Store the final result in C
-    matrixC[globalCol + globalRow*nDim] = acc* matrixD[globalCol + globalRow*nDim] * (1.0 - matrixD[globalCol + globalRow*nDim]);
+    matrixC[globalCol + globalRow*nDim] = clamp((float)(acc*matrixD[globalCol + globalRow*nDim] * (1.0 - matrixD[globalCol + globalRow*nDim])),-0.05f,0.05f);
 }
 
 __kernel void Multiply_Deltas_Buffers_Tanh(global float* matrixA, global float* matrixB, global float* matrixC,
@@ -305,7 +311,7 @@ const int mDim, const int pDim, const int nDim, global float* matrixD)
     }
  
     // Store the final result in C
-    matrixC[globalCol + globalRow*nDim] = acc*  (1 - pow(matrixD[globalCol + globalRow*nDim],2));
+    matrixC[globalCol + globalRow*nDim] = clamp((float)(acc*(1 - pow(matrixD[globalCol + globalRow*nDim],2))),-0.05f,0.05f);
 }
 
 __kernel void Multiply_Deltas_Buffers_ReLU(global float* matrixA, global float* matrixB, global float* matrixC,
@@ -316,7 +322,11 @@ const int mDim, const int pDim, const int nDim, global float* matrixD)
     const int col = get_local_id(1); // Local col ID (max: TS)
     const int globalRow = TS*get_group_id(0) + row; // Row ID of C (0..M)
     const int globalCol = TS*get_group_id(1) + col; // Col ID of C (0..N)
- 
+    if (globalRow==0 && globalCol==0){
+        printf("In DELTA MUL BUFF RELU 2");
+    }
+
+
     // Local memory to fit a tile of TS*TS elements of A and B
     __local float Asub[TS][TS];
     __local float Bsub[TS][TS];
@@ -350,7 +360,7 @@ const int mDim, const int pDim, const int nDim, global float* matrixD)
     }
  
     // Store the final result in C
-    matrixC[globalCol + globalRow*nDim] = acc* (matrixD[globalCol + globalRow*nDim] > 0.0? 1.0:0.0);
+    matrixC[globalCol + globalRow*nDim] = clamp((float)(acc*(matrixD[globalCol + globalRow*nDim] > 0.0? 1.0:0.0)),-0.05f,0.05f);
 }
 
 __kernel void Update_Weights_Buffers(global float* matrixA, global float* matrixB, global float* matrixC
@@ -361,7 +371,7 @@ __kernel void Update_Weights_Buffers(global float* matrixA, global float* matrix
     const int col = get_local_id(1); // Local col ID (max: TS)
     const int globalRow = TS*get_group_id(0) + row; // Row ID of C (0..M)
     const int globalCol = TS*get_group_id(1) + col; // Col ID of C (0..N)
- 
+
     // Local memory to fit a tile of TS*TS elements of A and B
     __local float Asub[TS][TS];
     __local float Bsub[TS][TS];
@@ -372,7 +382,7 @@ __kernel void Update_Weights_Buffers(global float* matrixA, global float* matrix
     // Loop over all tiles
     const int numTiles = pDim/TS;
     for (int t=0; t<numTiles; t++) {
- 
+        
         // Load one tile of A and B into local memory
         const int tiledRow = TS*t + row;
         const int tiledCol = TS*t + col;
@@ -392,5 +402,5 @@ __kernel void Update_Weights_Buffers(global float* matrixA, global float* matrix
     }
  
     // Store the final result in C
-    matrixC[globalCol + globalRow*nDim] = matrixC[globalCol + globalRow*nDim] - clamp(offset*acc/(float)pDim,-0.02f,0.02f);
+    matrixC[globalCol + globalRow*nDim] = matrixC[globalCol + globalRow*nDim] - offset*acc;
 }

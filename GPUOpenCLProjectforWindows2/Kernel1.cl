@@ -368,7 +368,7 @@ const int lNew, const int lOld, const int batchSize, global float* outputs)
     }
     //printf("id is %d %d, final value is %f \n \n \n ", x, y, temp);
 
-    deltasMatrixNew[x*batchSize + y] = temp;
+    deltasMatrixNew[x*batchSize + y] = clamp((float)temp,-0.005f,0.005f);
 }
 
 __kernel void Multiply_Deltas_Buffers_Sigmoid(global float* weightsMatrix, global float* deltasMatrixOld, global float* deltasMatrixNew,
@@ -389,7 +389,7 @@ const int lNew, const int lOld, const int batchSize, global float* outputs)
     }
    // printf("id is %d %d, final value is %f \n \n \n ", x, y, temp);
 
-    deltasMatrixNew[x*batchSize + y] = temp * outputs[x*batchSize+y] * (1.0 - outputs[x*batchSize+y]); //sig(x) * (1-sig(x)) is the sigmoid derivative
+    deltasMatrixNew[x*batchSize + y] = clamp((float)temp * outputs[x*batchSize+y] * (1.0f - outputs[x*batchSize+y]) , -0.005f , 0.005f);
 }
 
 __kernel void Multiply_Deltas_Buffers_Tanh(global float* weightsMatrix, global float* deltasMatrixOld, global float* deltasMatrixNew,
@@ -410,7 +410,7 @@ const int lNew, const int lOld, const int batchSize, global float* outputs)
     }
     printf("id is %d %d, final value is %f \n \n \n ", x, y, temp);
 
-    deltasMatrixNew[x*batchSize + y] = temp * (1 - pow(outputs[x*batchSize+y],2));
+    deltasMatrixNew[x*batchSize + y] = clamp((float)(temp * (1.0f - pow(outputs[x*batchSize+y],2))),-0.005f,0.005f);
 }
 
 __kernel void Multiply_Deltas_Buffers_ReLU(global float* weightsMatrix, global float* deltasMatrixOld, global float* deltasMatrixNew,
@@ -432,7 +432,7 @@ const int lNew, const int lOld, const int batchSize, global float* outputs)
     }
     //printf("id is %d %d, final value is %f \n \n \n ", x, y, temp);
 
-    deltasMatrixNew[x*batchSize + y] = temp * (outputs[x*batchSize + y] > 0.0? 1.0:0.0);// (outputs[x*batchSize+y] > 0.0? 1.0:0.0);
+    deltasMatrixNew[x*batchSize + y] = clamp((float)(temp * (outputs[x*batchSize + y] > 0.0? 1.0:0.0)),-0.005f,0.005f);
 }
 
 __kernel void Update_Weights_Buffers(global float* deltasMatrix, global float* outputsMatrix, global float* weightsMatrix
@@ -451,8 +451,8 @@ __kernel void Update_Weights_Buffers(global float* deltasMatrix, global float* o
         //printf("id is %d %d, values are %f %f \n ", x, y, A, B );
         temp+=A*B;
     }
-    temp = clamp(learning_rate*temp / (float)batchSize,-0.02f,0.02f);
-
+    //temp = clamp(learning_rate*temp / (float)batchSize,-0.005f,0.005f);
+    temp =  learning_rate*temp / (float)batchSize;
     //printf("id is %d %d, pre update weight  is %f \n", x, y, temp);
     weightsMatrix[x*outputsDim + y] = weightsMatrix[x*outputsDim + y] - temp;
     //printf("id is %d %d, update value is %f\n", x, y, temp);
