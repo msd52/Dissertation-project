@@ -11,9 +11,6 @@ const int mDim, const int pDim, const int nDim)
     const int col = get_local_id(1); // Local col ID (max: TS)
     const int globalRow = TS*get_group_id(0) + row; // Row ID of C (0..M)
     const int globalCol = TS*get_group_id(1) + col; // Col ID of C (0..N)
-    if (globalRow==0 && globalCol==0){
-        printf("In MUL BUFF ID 2");
-    }
 
     // Local memory to fit a tile of TS*TS elements of A and B
     __local float Asub[TS][TS];
@@ -144,9 +141,6 @@ const int mDim, const int pDim, const int nDim)
     const int col = get_local_id(1); // Local col ID (max: TS)
     const int globalRow = TS*get_group_id(0) + row; // Row ID of C (0..M)
     const int globalCol = TS*get_group_id(1) + col; // Col ID of C (0..N)
-    if (globalRow==0 && globalCol==0){
-        printf("In MUL BUFF RELU 2");
-    }
 
     // Local memory to fit a tile of TS*TS elements of A and B
     __local float Asub[TS][TS];
@@ -190,9 +184,6 @@ const int mDim, const int pDim, const int nDim, global float* matrixD)
     const int col = get_local_id(1); // Local col ID (max: TS)
     const int globalRow = TS*get_group_id(0) + row; // Row ID of C (0..M)
     const int globalCol = TS*get_group_id(1) + col; // Col ID of C (0..N)
-    if (globalRow==0 && globalCol==0){
-        printf("In DELTA MUL BUFF ID 2");
-    }
 
     // Local memory to fit a tile of TS*TS elements of A and B
     __local float Asub[TS][TS];
@@ -226,7 +217,7 @@ const int mDim, const int pDim, const int nDim, global float* matrixD)
     }
  
     // Store the final result in C
-    matrixC[globalCol + globalRow*nDim] = clamp((float)acc,-0.05f,0.05f);
+    matrixC[globalCol + globalRow*nDim] = clamp((float)acc,-0.005f,0.005f);
 }
 
 
@@ -269,7 +260,7 @@ const int mDim, const int pDim, const int nDim, global float* matrixD)
     }
  
     // Store the final result in C
-    matrixC[globalCol + globalRow*nDim] = clamp((float)(acc*matrixD[globalCol + globalRow*nDim] * (1.0 - matrixD[globalCol + globalRow*nDim])),-0.05f,0.05f);
+    matrixC[globalCol + globalRow*nDim] = clamp((float)(acc*matrixD[globalCol + globalRow*nDim] * (1.0 - matrixD[globalCol + globalRow*nDim])),-0.005f,0.005f);
 }
 
 __kernel void Multiply_Deltas_Buffers_Tanh(global float* matrixA, global float* matrixB, global float* matrixC,
@@ -311,7 +302,7 @@ const int mDim, const int pDim, const int nDim, global float* matrixD)
     }
  
     // Store the final result in C
-    matrixC[globalCol + globalRow*nDim] = clamp((float)(acc*(1 - pow(matrixD[globalCol + globalRow*nDim],2))),-0.05f,0.05f);
+    matrixC[globalCol + globalRow*nDim] = clamp((float)(acc*(1 - pow(matrixD[globalCol + globalRow*nDim],2))),-0.005f,0.005f);
 }
 
 __kernel void Multiply_Deltas_Buffers_ReLU(global float* matrixA, global float* matrixB, global float* matrixC,
@@ -322,9 +313,6 @@ const int mDim, const int pDim, const int nDim, global float* matrixD)
     const int col = get_local_id(1); // Local col ID (max: TS)
     const int globalRow = TS*get_group_id(0) + row; // Row ID of C (0..M)
     const int globalCol = TS*get_group_id(1) + col; // Col ID of C (0..N)
-    if (globalRow==0 && globalCol==0){
-        printf("In DELTA MUL BUFF RELU 2");
-    }
 
 
     // Local memory to fit a tile of TS*TS elements of A and B
@@ -360,7 +348,7 @@ const int mDim, const int pDim, const int nDim, global float* matrixD)
     }
  
     // Store the final result in C
-    matrixC[globalCol + globalRow*nDim] = clamp((float)(acc*(matrixD[globalCol + globalRow*nDim] > 0.0? 1.0:0.0)),-0.05f,0.05f);
+    matrixC[globalCol + globalRow*nDim] = clamp((float)(acc*(matrixD[globalCol + globalRow*nDim] > 0.0? 1.0:0.0)),-0.005f,0.005f);
 }
 
 __kernel void Update_Weights_Buffers(global float* matrixA, global float* matrixB, global float* matrixC

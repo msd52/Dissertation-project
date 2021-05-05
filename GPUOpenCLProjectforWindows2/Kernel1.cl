@@ -384,7 +384,7 @@ const int lNew, const int lOld, const int batchSize, global float* outputs)
     for (int p = 0 ; p < lOld ; p++){
         A = weightsMatrix[p*lNew+x];
         B = deltasMatrixOld[p*batchSize+y];
-        printf("id is %d %d, values are %f %f \n ", x, y, A, B );
+        //printf("id is %d %d, values are %f %f \n ", x, y, A, B );
         temp+=A*B;
     }
    // printf("id is %d %d, final value is %f \n \n \n ", x, y, temp);
@@ -395,20 +395,20 @@ const int lNew, const int lOld, const int batchSize, global float* outputs)
 __kernel void Multiply_Deltas_Buffers_Tanh(global float* weightsMatrix, global float* deltasMatrixOld, global float* deltasMatrixNew,
 const int lNew, const int lOld, const int batchSize, global float* outputs)
 {
-    printf("In Multiply_Deltas_Buffers_Tanh");
+    //printf("In Multiply_Deltas_Buffers_Tanh");
     const int x = get_global_id(0); //the row specification, from 0 to lNew-1
     const int y = get_global_id(1); //sample point id
     float A,B, temp = 0;
     
-    printf("start %d %d \n", x, y);
+    //printf("start %d %d \n", x, y);
 
     for (int p = 0 ; p < lOld ; p++){
         A = weightsMatrix[p*lNew+x];
         B = deltasMatrixOld[p*batchSize+y];
-        printf("id is %d %d, values are %f %f \n ", x, y, A, B );
+        //printf("id is %d %d, values are %f %f \n ", x, y, A, B );
         temp+=A*B;
     }
-    printf("id is %d %d, final value is %f \n \n \n ", x, y, temp);
+    //printf("id is %d %d, final value is %f \n \n \n ", x, y, temp);
 
     deltasMatrixNew[x*batchSize + y] = clamp((float)(temp * (1.0f - pow(outputs[x*batchSize+y],2))),-0.005f,0.005f);
 }

@@ -709,7 +709,7 @@ int CreateAndBuildProgram(ocl_args_d_t *ocl)
     // The size of the C program is returned in sourceSize
     char* source = NULL;
     size_t srcSize = 0;
-    err = ReadSourceFromFile("kernel2.cl", &source, &srcSize);
+    err = ReadSourceFromFile("kernel3.cl", &source, &srcSize);
     if (CL_SUCCESS != err)
     {
         LogError("Error: ReadSourceFromFile returned %s.\n", TranslateOpenCLError(err));
@@ -2723,14 +2723,15 @@ cl_uint minibatchGD(ocl_args_d_t* ocl, int dimensions[], int* activationFunction
         activationFunctionKernelsSimple, layers, classes, valDataset, valLabels, numValImages);
 }
 
-cl_int kernelTesting(ocl_args_d_t* ocl, char* activationFunctionKernelNames,char* activationFunctionDeltaKernelNames, cl_kernel* activationFunctionKernels,
-    cl_kernel* activationFunctionDeltaKernels, cl_kernel* activationFunctionKernelsSimple, cl_kernel* activationFunctionDeltaKernelsSimple, const size_t global[2], const size_t local[2], int numActivationFunctions) {
+//Testing correctness and measuring latency of new kernels
+cl_int kernelCorrectnessTesting(ocl_args_d_t* ocl, char** activationFunctionKernelNames,char** activationFunctionDeltaKernelNames, cl_kernel* activationFunctionKernels,
+    cl_kernel* activationFunctionDeltaKernels, cl_kernel* activationFunctionKernelsSimple, cl_kernel* activationFunctionDeltaKernelsSimple, 
+    const size_t global[2], const size_t local[2], int numActivationFunctions, int mDim, int pDim, int nDim) {
     //Testing matrices where each dimension has a different value
     cl_int err;
     bool outputIsCorrect;
-
-    int mDim = 256, pDim = 512, nDim = 1024;
-
+    const size_t globalSimple[2] = { mDim, nDim };
+ 
     cl_uint optimizedSizeTempA = ((sizeof(cl_float) * mDim * pDim - 1) / 64 + 1) * 64;
     cl_uint optimizedSizeTempB = ((sizeof(cl_float) * pDim * nDim - 1) / 64 + 1) * 64;
     cl_uint optimizedSizeTempC = ((sizeof(cl_float) * mDim * nDim - 1) / 64 + 1) * 64;
@@ -2739,7 +2740,7 @@ cl_int kernelTesting(ocl_args_d_t* ocl, char* activationFunctionKernelNames,char
     cl_float* auxiliaryMatrixar = (cl_float*)_aligned_malloc(optimizedSizeTempC, 4096);
     mGenerateMatrices(matrixAar, mDim, pDim);
     mGenerateMatrices(matrixBar, pDim, nDim);
-    mGenerateMatrices(matrixBar, mDim, nDim);
+    mGenerateMatrices(auxiliaryMatrixar, mDim, nDim);
 
 
     // Create first buffer based on host memory inputA
@@ -2763,20 +2764,34 @@ cl_int kernelTesting(ocl_args_d_t* ocl, char* activationFunctionKernelNames,char
     cl_float* simpleOutputs = (cl_float*)_aligned_malloc(optimizedSizeNetworkOutput, 4096);
     int arraySize = mDim * nDim;
 
+    ocl->srcA = matrixA;
+    ocl->srcB = matrixB;
+    auto start = high_resolution_clock::now();
+    auto elapsed = std::chrono::high_resolution_clock::now() - start;
+    long long microseconds;
+
     //FORWARDPROP KERNELS//////////////////////////////////////////////////////////////////////////////////////////////////
     for (int kernelIdx = 0; kernelIdx < numActivationFunctions; ++kernelIdx) {
         outputIsCorrect = true;
         // NEW KERNEL -----------------------------------------------------------------------------------------
+
+
         ocl->kernel = activationFunctionKernels[kernelIdx];
+        ocl->dstMem = matrixC;
         if (CL_SUCCESS != mSetKernelArguments(ocl, NULL, mDim, pDim, nDim, 0.0, 1))
         {
             return -1;
         }
-        //system("pause");
+
+        start = high_resolution_clock::now();
         if (CL_SUCCESS != mExecuteMultiplyKernelCustom2(ocl, global, local))
         {
             return -1;
         }
+        elapsed = std::chrono::high_resolution_clock::now() - start;
+        microseconds = std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count();
+        std::cout << microseconds << " microseconds for new "<< activationFunctionKernelNames[kernelIdx]<<"\n";
+
         err = clEnqueueReadBuffer(ocl->commandQueue, ocl->dstMem, true, 0, sizeof(cl_float) * arraySize, outputs, 0, NULL, NULL);
         if (CL_SUCCESS != err)
         {
@@ -2785,15 +2800,21 @@ cl_int kernelTesting(ocl_args_d_t* ocl, char* activationFunctionKernelNames,char
 
         //TESTED KERNEL-------------------------------------------------------------------------------------------
         ocl->kernel = activationFunctionKernelsSimple[kernelIdx];
+        ocl->dstMem = matrixD;
         // Passing arguments into OpenCL kernel.
         if (CL_SUCCESS != mSetKernelArguments(ocl, NULL, mDim, pDim, nDim, 0.0, 1))
         {
             return -1;
         }
-        if (CL_SUCCESS != mExecuteMultiplyKernelCustom2(ocl, global, NULL))
+        start = high_resolution_clock::now();
+        if (CL_SUCCESS != mExecuteMultiplyKernelCustom2(ocl, globalSimple, NULL))
         {
             return -1;
         }
+        elapsed = std::chrono::high_resolution_clock::now() - start;
+        microseconds = std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count();
+        std::cout << microseconds << " microseconds for tested " << activationFunctionKernelNames[kernelIdx] << "\n";
+
         err = clEnqueueReadBuffer(ocl->commandQueue, ocl->dstMem, true, 0, sizeof(cl_float) * arraySize, simpleOutputs, 0, NULL, NULL);
         if (CL_SUCCESS != err)
         {
@@ -2803,14 +2824,15 @@ cl_int kernelTesting(ocl_args_d_t* ocl, char* activationFunctionKernelNames,char
         for (int i = 0; i < arraySize; ++i) {
             if (outputs[i] != simpleOutputs[i]) {
                 outputIsCorrect = false;
+                //std::cout << "2 VALUES ARE " << outputs[i] << " and " << simpleOutputs[i] << '\n';
             }
         }
            
         if (outputIsCorrect) {
-            std::cout << "Kernel " << activationFunctionKernelNames[kernelIdx] << " is CORRECT" << '\n';
+            std::cout << "Kernel " << activationFunctionKernelNames[kernelIdx] << " PASSES" << '\n';
         }
         else {
-            std::cout << "Kernel " << activationFunctionKernelNames[kernelIdx] << " is WRONG" << '\n';
+            std::cout << "Kernel " << activationFunctionKernelNames[kernelIdx] << " FAILS" << '\n';
         }
     }
 
@@ -2819,14 +2841,20 @@ cl_int kernelTesting(ocl_args_d_t* ocl, char* activationFunctionKernelNames,char
         outputIsCorrect = true;
         // NEW KERNEL -----------------------------------------------------------------------------------------
         ocl->kernel = activationFunctionDeltaKernels[kernelIdx];
+        ocl->dstMem = matrixC;
         if (CL_SUCCESS != mSetKernelArguments(ocl, &auxiliaryMatrix, mDim, pDim, nDim, 0.0, 2))
         {
             return -1;
         }
+        start = high_resolution_clock::now();
         if (CL_SUCCESS != mExecuteMultiplyKernelCustom2(ocl, global, local))
         {
             return -1;
         }
+        elapsed = std::chrono::high_resolution_clock::now() - start;
+        microseconds = std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count();
+        std::cout << microseconds << " microseconds for new " << activationFunctionDeltaKernelNames[kernelIdx] << "\n";
+
         err = clEnqueueReadBuffer(ocl->commandQueue, ocl->dstMem, true, 0, sizeof(cl_float) * arraySize, outputs, 0, NULL, NULL);
         if (CL_SUCCESS != err)
         {
@@ -2835,15 +2863,21 @@ cl_int kernelTesting(ocl_args_d_t* ocl, char* activationFunctionKernelNames,char
 
         //TESTED KERNEL-------------------------------------------------------------------------------------------
         ocl->kernel = activationFunctionDeltaKernelsSimple[kernelIdx];
+        ocl->dstMem = matrixD;
         // Passing arguments into OpenCL kernel.
         if (CL_SUCCESS != mSetKernelArguments(ocl, &auxiliaryMatrix, mDim, pDim, nDim, 0.0, 2))
         {
             return -1;
         }
-        if (CL_SUCCESS != mExecuteMultiplyKernelCustom2(ocl, global, NULL))
+        start = high_resolution_clock::now();
+        if (CL_SUCCESS != mExecuteMultiplyKernelCustom2(ocl, globalSimple, NULL))
         {
             return -1;
         }
+        elapsed = std::chrono::high_resolution_clock::now() - start;
+        microseconds = std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count();
+        std::cout << microseconds << " microseconds for tested " << activationFunctionDeltaKernelNames[kernelIdx] << "\n";
+
         err = clEnqueueReadBuffer(ocl->commandQueue, ocl->dstMem, true, 0, sizeof(cl_float) * arraySize, simpleOutputs, 0, NULL, NULL);
         if (CL_SUCCESS != err)
         {
@@ -2857,10 +2891,10 @@ cl_int kernelTesting(ocl_args_d_t* ocl, char* activationFunctionKernelNames,char
         }
 
         if (outputIsCorrect) {
-            std::cout << "Kernel " << activationFunctionKernelNames[kernelIdx] << " is CORRECT" << '\n';
+            std::cout << "Kernel " << activationFunctionKernelNames[kernelIdx] << " PASSES" << '\n';
         }
         else {
-            std::cout << "Kernel " << activationFunctionKernelNames[kernelIdx] << " is WRONG" << '\n';
+            std::cout << "Kernel " << activationFunctionKernelNames[kernelIdx] << " FAILS" << '\n';
         }
     }
 
@@ -2868,6 +2902,7 @@ cl_int kernelTesting(ocl_args_d_t* ocl, char* activationFunctionKernelNames,char
      //NEW KERNEL-------------------------------------------------------------------------------------------
     cl_float learning_rate = 0.1f;
     ocl->kernel = clCreateKernel(ocl->program, "Update_Weights_Buffers", &err);
+    ocl->dstMem = matrixC;
     if (CL_SUCCESS != err)
     {
         LogError("Error: clCreateKernel returned %s\n", TranslateOpenCLError(err));
@@ -2877,13 +2912,18 @@ cl_int kernelTesting(ocl_args_d_t* ocl, char* activationFunctionKernelNames,char
     {
         return -1;
     }
-
+    start = high_resolution_clock::now();
     if (CL_SUCCESS != mExecuteMultiplyKernelCustom2(ocl, global, local))
     {
         return -1;
     }
+    elapsed = std::chrono::high_resolution_clock::now() - start;
+    microseconds = std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count();
+    std::cout << microseconds << " microseconds for new Update_Weights_Buffers \n";
+
     //TESTED KERNEL-------------------------------------------------------------------------------------------
     ocl->kernel = clCreateKernel(ocl->programSimple, "Update_Weights_Buffers", &err);
+    ocl->dstMem = matrixD;
     if (CL_SUCCESS != err)
     {
         LogError("Error: clCreateKernel returned %s\n", TranslateOpenCLError(err));
@@ -2893,10 +2933,14 @@ cl_int kernelTesting(ocl_args_d_t* ocl, char* activationFunctionKernelNames,char
     {
         return -1;
     }
-    if (CL_SUCCESS != mExecuteMultiplyKernelCustom2(ocl, global, NULL))
+    start = high_resolution_clock::now();
+    if (CL_SUCCESS != mExecuteMultiplyKernelCustom2(ocl, globalSimple, NULL))
     {
         return -1;
     }
+    elapsed = std::chrono::high_resolution_clock::now() - start;
+    microseconds = std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count();
+    std::cout << microseconds << " microseconds for tested Update_Weights_Buffers \n";
 
     for (int i = 0; i < arraySize; ++i) {
         if (outputs[i] != simpleOutputs[i]) {
@@ -2905,24 +2949,96 @@ cl_int kernelTesting(ocl_args_d_t* ocl, char* activationFunctionKernelNames,char
     }
 
     if (outputIsCorrect) {
-        std::cout << "Kernel " << activationFunctionKernelNames[kernelIdx] << " is CORRECT" << '\n';
+        std::cout << "Kernel Update_Weights_Buffers PASSES" << '\n';
     }
     else {
-        std::cout << "Kernel " << activationFunctionKernelNames[kernelIdx] << " is WRONG" << '\n';
+        std::cout << "Kernel Update_Weights_Buffers FAILS" << '\n';
     }
 
-    //auto start1 = high_resolution_clock::now();
-    //if (CL_SUCCESS != mExecuteMultiplyKernelCustom2(ocl, global, local))
-    //{
-    //    return -1;
-    //}
-    //auto elapsed1 = std::chrono::high_resolution_clock::now() - start1;
-    //long long microseconds1 = std::chrono::duration_cast<std::chrono::microseconds>(elapsed1).count();
-    //std::cout << microseconds1 << " microseconds since epoch\n";
-    //total += microseconds1 / 50;
-
+    system("pause");
     return 0;
 }
+
+//This function takes multiple measurements of latency and returns average for a specific set of dimensions
+cl_int kernelLatencyTestingAuxiliary(ocl_args_d_t* ocl, cl_kernel* activationFunctionKernels,
+    const size_t global[2], const size_t local[2], int mDim, int pDim, int nDim, int iterations) {
+    //Testing matrices where each dimension has a different value
+    cl_int err;
+
+    cl_uint optimizedSizeTempA = ((sizeof(cl_float) * mDim * pDim - 1) / 64 + 1) * 64;
+    cl_uint optimizedSizeTempB = ((sizeof(cl_float) * pDim * nDim - 1) / 64 + 1) * 64;
+    cl_uint optimizedSizeTempC = ((sizeof(cl_float) * mDim * nDim - 1) / 64 + 1) * 64;
+    cl_float* matrixAar = (cl_float*)_aligned_malloc(optimizedSizeTempA, 4096);
+    cl_float* matrixBar = (cl_float*)_aligned_malloc(optimizedSizeTempB, 4096);
+    mGenerateMatrices(matrixAar, mDim, pDim);
+    mGenerateMatrices(matrixBar, pDim, nDim);
+
+    cl_mem matrixA = clCreateBuffer(ocl->context, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR, sizeof(cl_float) * mDim * pDim, matrixAar, &err);
+    cl_mem matrixB = clCreateBuffer(ocl->context, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR, sizeof(cl_float) * pDim * nDim, matrixBar, &err);
+    cl_mem matrixC = clCreateBuffer(ocl->context, CL_MEM_READ_WRITE, sizeof(cl_float) * mDim * nDim, NULL, &err);
+    if (CL_SUCCESS != err)
+    {
+        LogError("Error: matrix creation failed with %s\n", TranslateOpenCLError(err));
+        return err;
+    }
+
+    _aligned_free(matrixAar);
+    _aligned_free(matrixBar);
+    int arraySize = mDim * nDim;
+
+    ocl->srcA = matrixA;
+    ocl->srcB = matrixB;
+    auto start = high_resolution_clock::now();
+    auto elapsed = std::chrono::high_resolution_clock::now() - start;
+    long long microseconds;
+
+    cl_uint timesSize = ((sizeof(long long) * iterations - 1) / 64 + 1) * 64;
+    long long* times = (long long*)_aligned_malloc(timesSize, 4096);
+
+    for (int iter = 0; iter < iterations; iter++) {
+
+        ocl->kernel = activationFunctionKernels[0];
+        ocl->dstMem = matrixC;
+        if (CL_SUCCESS != mSetKernelArguments(ocl, NULL, mDim, pDim, nDim, 0.0, 1))
+        {
+            return -1;
+        }
+
+        start = high_resolution_clock::now();
+        if (CL_SUCCESS != mExecuteMultiplyKernelCustom2(ocl, global, local))
+        {
+            return -1;
+        }
+        elapsed = std::chrono::high_resolution_clock::now() - start;
+        microseconds = std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count();
+        std::cout << microseconds << " microseconds for this kernel \n";
+    }
+
+    long long avg;
+    for (int i = 0; i < iterations; ++i) {
+        avg += times[i];
+    }
+    avg = avg / iterations;
+
+    _aligned_free(times);
+    std::cout << "Average time is " << avg << '\n';
+    system("pause");
+    return 0;
+}
+
+//In contrast to kernelCorrectnessTesting, this function takes multiple measurements of latency and returns average over many different sets of dimensions
+void kernelLatencyTesting(ocl_args_d_t* ocl, cl_kernel* activationFunctionKernels,int iterations, int WGS, int TW) {
+
+    int values[4] = { 128, 256, 512, 1024 };
+    for (int idx = 0; idx < 4; ++idx) {
+        const size_t global[2] = { values[idx], values[idx] / TW };
+        const size_t local[2] = { WGS, WGS / TW};
+        std::cout << "measuring for matrix size of " << values[idx] << '\n';
+        kernelLatencyTestingAuxiliary(ocl, activationFunctionKernels, global, local, values[idx], values[idx], values[idx], iterations);
+    }
+}
+
+
 
 int _tmain(int argc, TCHAR* argv[])
 {
@@ -3021,12 +3137,29 @@ int _tmain(int argc, TCHAR* argv[])
     int classes = 10;
 
     //MAIN LOOP
+    //{
+    //    int TS = 16;
+    //    mDim = 512, pDim = 512, nDim = 1024;
+    //    int WPT = 8;
+    //    const size_t global[2] = { mDim, nDim / WPT };
+    //    const size_t local[2] = { TS, TS / WPT };
+    //    kernelCorrectnessTesting(&ocl, activationFunctionKernelNames, activationFunctionDeltaKernelNames, activationFunctionKernels,
+    //        activationFunctionDeltaKernels, activationFunctionKernelsSimple, activationFunctionDeltaKernelsSimple, global,
+    //        local, numAF, mDim, pDim, nDim);
+    //}
+    {
+        int TW = 8;
+        int WGS = 16;
+        int iterations = 20;
+        kernelLatencyTesting(&ocl, activationFunctionKernels, iterations, WGS, TW);
+    }
 
-    minibatchGD(&ocl, dimAr, activationFunctions, activationFunctionKernels, activationFunctionKernelsSimple,
-        activationFunctionDeltaKernels, activationFunctionDeltaKernelsSimple, batchSize, layers, classes, epochs,
-        trainingDataset, trainingLabels, numTrainImages, valDataset, valLabels, numValImages);
 
-    system("pause");
+    //minibatchGD(&ocl, dimAr, activationFunctions, activationFunctionKernels, activationFunctionKernelsSimple,
+    //    activationFunctionDeltaKernels, activationFunctionDeltaKernelsSimple, batchSize, layers, classes, epochs,
+    //    trainingDataset, trainingLabels, numTrainImages, valDataset, valLabels, numValImages);
+
+    //system("pause");
     
     //float** weightsArray;
     //cl_mem* weightBuffers, * outputBuffers, * deltaBuffers, inputBuffer;
