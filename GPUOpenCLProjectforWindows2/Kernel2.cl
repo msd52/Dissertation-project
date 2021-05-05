@@ -1,9 +1,12 @@
 //File containing implementation with basic cache blocking using local memory
 
 #define TS 16
+#define DEBUG_FORWARD false
+#define DEBUG_DELTAS false
+#define DEBUG_UPDATE false
 
 __kernel void Multiply_Buffer_Identity(global float* matrixA, global float* matrixB, global float* matrixC,
-const int mDim, const int pDim, const int nDim)
+const int mDim, const int pDim, const int nDim, global float* biases)
 {
    
     // Thread identifiers
@@ -43,14 +46,14 @@ const int mDim, const int pDim, const int nDim)
     }
  
     // Store the final result in C
-    matrixC[globalCol + globalRow*nDim] = acc;
+    matrixC[globalCol + globalRow*nDim] = acc++biases[r];
     //printf("id IBuffer is %d %d, final value is %f \n \n \n ", globalRow, globalCol, acc);
 }
 
 
 
 __kernel void Multiply_Buffer_Sigmoid(global float* matrixA, global float* matrixB, global float* matrixC,
-const int mDim, const int pDim, const int nDim)
+const int mDim, const int pDim, const int nDim, global float* biases)
 {
     // Thread identifiers
     const int row = get_local_id(0); // Local row ID (max: TS)
@@ -88,11 +91,11 @@ const int mDim, const int pDim, const int nDim)
     }
  
     // Store the final result in C
-    matrixC[globalCol + globalRow*nDim] = 1.0 / (1.0 + exp(-acc));
+    matrixC[globalCol + globalRow*nDim] = 1.0 / (1.0 + exp(-acc-biases[r]));
 }
 
 __kernel void Multiply_Buffer_Tanh(global float* matrixA, global float* matrixB, global float* matrixC,
-const int mDim, const int pDim, const int nDim)
+const int mDim, const int pDim, const int nDim, global float* biases)
 {
     // Thread identifiers
     const int row = get_local_id(0); // Local row ID (max: TS)
@@ -130,11 +133,11 @@ const int mDim, const int pDim, const int nDim)
     }
  
     // Store the final result in C
-    matrixC[globalCol + globalRow*nDim] = tanh(acc);
+    matrixC[globalCol + globalRow*nDim] = tanh(acc+biases[r]);
 }
 
 __kernel void Multiply_Buffer_ReLU(global float* matrixA, global float* matrixB, global float* matrixC,
-const int mDim, const int pDim, const int nDim)
+const int mDim, const int pDim, const int nDim, global float* biases)
 {
     // Thread identifiers
     const int row = get_local_id(0); // Local row ID (max: TS)
@@ -173,7 +176,7 @@ const int mDim, const int pDim, const int nDim)
     }
  
     // Store the final result in C
-    matrixC[globalCol + globalRow*nDim] = fmax(acc,0);
+    matrixC[globalCol + globalRow*nDim] = fmax(acc+biases[r],0);
 }
 
 __kernel void Multiply_Deltas_Buffers_Identity(global float* matrixA, global float* matrixB, global float* matrixC,
@@ -352,7 +355,7 @@ const int mDim, const int pDim, const int nDim, global float* matrixD)
 }
 
 __kernel void Update_Weights_Buffers(global float* matrixA, global float* matrixB, global float* matrixC
-,const int mDim, const int pDim, const int nDim, const float offset)
+,const int mDim, const int pDim, const int nDim, global float* biases, const float offset)
 {
     // Thread identifiers
     const int row = get_local_id(0); // Local row ID (max: TS)
@@ -384,11 +387,17 @@ __kernel void Update_Weights_Buffers(global float* matrixA, global float* matrix
         for (int k=0; k<TS; k++) {
             acc += Asub[row][k] * Bsub[k][col];
         }
-        acc = acc/(float)pDim;
         // Synchronise before loading the next tile
         barrier(CLK_LOCAL_MEM_FENCE);
     }
  
     // Store the final result in C
-    matrixC[globalCol + globalRow*nDim] = matrixC[globalCol + globalRow*nDim] - offset*acc;
+    matrixC[globalCol + globalRow*nDim] = matrixC[globalCol + globalRow*nDim] - offset*acc/(float)pDim;
+    if (globalCol==0){
+        float tempBias=0.0f;
+        for (int p = 0 ; p < pDim; p++){
+            tempBias+= matrixA[globalRow*pDim+p];
+        }
+        biases[x] = biases[x] - offset*tempBias / (float)pDim;
+    }
 }
