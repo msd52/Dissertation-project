@@ -828,28 +828,28 @@ cl_uint mSetKernelArguments(ocl_args_d_t *ocl, cl_mem* matrixD, cl_uint mDim, cl
     err = clSetKernelArg(ocl->kernel, 3, sizeof(cl_uint), &mDim);
     if (CL_SUCCESS != err)
     {
-       LogError("Error: Failed to set argument dstMem, returned %s\n", TranslateOpenCLError(err));
+       LogError("Error: Failed to set argument mDim, returned %s\n", TranslateOpenCLError(err));
        return err;
     }
 
     err = clSetKernelArg(ocl->kernel, 4, sizeof(cl_uint), &pDim);
     if (CL_SUCCESS != err)
     {
-        LogError("Error: Failed to set argument dstMem, returned %s\n", TranslateOpenCLError(err));
+        LogError("Error: Failed to set argument pDim, returned %s\n", TranslateOpenCLError(err));
         return err;
     }
 
     err = clSetKernelArg(ocl->kernel, 5, sizeof(cl_uint), &nDim);
     if (CL_SUCCESS != err)
     {
-        LogError("Error: Failed to set argument dstMem, returned %s\n", TranslateOpenCLError(err));
+        LogError("Error: Failed to set argument nDim, returned %s\n", TranslateOpenCLError(err));
         return err;
     }
 
     err = clSetKernelArg(ocl->kernel, 6, sizeof(cl_mem), (void*)matrixD);
     if (CL_SUCCESS != err)
     {
-        LogError("Error: Failed to set argument dstMem, returned %s\n", TranslateOpenCLError(err));
+        LogError("Error: Failed to set argument matrixD, returned %s\n", TranslateOpenCLError(err));
         return err;
     }
 
@@ -857,7 +857,7 @@ cl_uint mSetKernelArguments(ocl_args_d_t *ocl, cl_mem* matrixD, cl_uint mDim, cl
         err = clSetKernelArg(ocl->kernel, 7, sizeof(cl_float), &learningRate);
         if (CL_SUCCESS != err)
         {
-            LogError("Error: Failed to set argument dstMem, returned %s\n", TranslateOpenCLError(err));
+            LogError("Error: Failed to set argument learning_rate, returned %s\n", TranslateOpenCLError(err));
             return err;
         }
     }
@@ -1478,9 +1478,18 @@ cl_uint backpropClassifier(ocl_args_d_t* ocl, cl_mem* buffersWeightsArray, cl_me
         }
     }
 
+    std::cout << "Lets see whats going on here" << '\n';
+
     //perform weight updates now. We can potentially parallelize this fully even across all network layers
     //but for now it's only across the weights of each layer and then sequentially across layers
     pDim = batchSize;
+    cl_kernel optimKernel = clCreateKernel(ocl->program, "Update_Weights_Buffers", &err);
+    cl_kernel simpleKernel = clCreateKernel(ocl->programSimple, "Update_Weights_Buffers", &err);
+    if (CL_SUCCESS != err)
+    {
+        LogError("Error: clCreateKernel returned %s\n", TranslateOpenCLError(err));
+        return -1;
+    }
     for (int x = layers - 1; x >= 0; --x) {
         //std::cout << "I'm in iteration " << x << " of the weight update loop \n";
         mDim = dimensions[x + 1];
@@ -1495,12 +1504,7 @@ cl_uint backpropClassifier(ocl_args_d_t* ocl, cl_mem* buffersWeightsArray, cl_me
         }
 
         if (mDim % 16 == 0 && nDim % 16 == 0) {
-            ocl->kernel = clCreateKernel(ocl->program, "Update_Weights_Buffers", &err);
-            if (CL_SUCCESS != err)
-            {
-                LogError("Error: clCreateKernel returned %s\n", TranslateOpenCLError(err));
-                return -1;
-            }
+            ocl->kernel = optimKernel;
             if (CL_SUCCESS != mSetKernelArguments(ocl, &(buffersBiasesArray[x]), mDim, pDim, nDim, learning_rate, 3))
             {
                 return -1;
@@ -1512,12 +1516,7 @@ cl_uint backpropClassifier(ocl_args_d_t* ocl, cl_mem* buffersWeightsArray, cl_me
             }
         }
         else {
-            ocl->kernel = clCreateKernel(ocl->programSimple, "Update_Weights_Buffers", &err);
-            if (CL_SUCCESS != err)
-            {
-                LogError("Error: clCreateKernel returned %s\n", TranslateOpenCLError(err));
-                return -1;
-            }
+            ocl->kernel = simpleKernel;
             if (CL_SUCCESS != mSetKernelArguments(ocl, &(buffersBiasesArray[x]), mDim, pDim, nDim, learning_rate, 3))
             {
                 return -1;
@@ -1528,8 +1527,14 @@ cl_uint backpropClassifier(ocl_args_d_t* ocl, cl_mem* buffersWeightsArray, cl_me
                 return -1;
             }
         }
-        clReleaseKernel(ocl->kernel);
     }
+    clReleaseKernel(optimKernel);
+    clReleaseKernel(simpleKernel);
+    _aligned_free(preSoftmaxOutputs);
+    _aligned_free(softmaxOutputs);
+    _aligned_free(deltas);
+    clReleaseKernel(optimKernel);
+    clReleaseKernel(simpleKernel);
 }
 
 cl_uint validationClassifier(ocl_args_d_t* ocl, cl_mem* buffersWeightsArray, cl_mem* buffersBiasesArray, cl_mem* buffersOutsArray, cl_mem* bufferInputArray, int dimensions[],
@@ -2571,7 +2576,6 @@ cl_uint minibatchGD(ocl_args_d_t* ocl, int dimensions[], int* activationFunction
 
     optimizedSize = ((sizeof(cl_mem) * (itersPerEpoch-1) - 1) / 64 + 1) * 64;
     inputBuffer = (cl_mem*)_aligned_malloc(optimizedSize, 4096);
-    //groundTruthBuffer = (cl_mem*)_aligned_malloc(optimizedSize, 4096);
 
     cl_uint optimizedSizeIn = ((sizeof(cl_float) * dimensions[0] * batchSize - 1) / 64 + 1) * 64;
     cl_uint optimizedSizeOut = ((sizeof(cl_float*) * (itersPerEpoch-1) - 1) / 64 + 1) * 64;
@@ -2686,7 +2690,7 @@ cl_uint minibatchGD(ocl_args_d_t* ocl, int dimensions[], int* activationFunction
     for (int epoch = 0; epoch < epochs; ++epoch) {
         std::cout << "epoch " << epoch << " hereeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee \n";
         int batchSizeTemp = batchSize;
-        learning_rate *= 0.85;
+        learning_rate *= 0.92;
         for (int i = 0; i < itersPerEpoch-1; ++i) {
             std::cout << "ENTERING OPENCL FORWARD" << "\n";
             forwardpassClassifier(ocl, weightBuffers, biasBuffers, outputBuffers, &(inputBuffer[i]), dimensions, activationFunctions, activationFunctionKernels, activationFunctionKernelsSimple, batchSizeTemp, layers);
@@ -2709,6 +2713,32 @@ cl_uint minibatchGD(ocl_args_d_t* ocl, int dimensions[], int* activationFunction
     //For reasonably sized validation datasets, a single pass with a wide matrix is enough
     validationClassifier(ocl, weightBuffers, biasBuffers, outputBuffers, &(inputBuffer[0]), dimensions, activationFunctions, activationFunctionKernels,
         activationFunctionKernelsSimple, layers, classes, valDataset, valLabels, numValImages);
+    std::cout << "allright" << '\n';
+    system("pause");
+    for (cl_uint x = 0; x < layers; ++x) {
+        //std::cout << "releasing obj num" << x;
+        clReleaseMemObject(outputBuffers[x]);
+        clReleaseMemObject(weightBuffers[x]);
+        clReleaseMemObject(biasBuffers[x]);
+        clReleaseMemObject(deltaBuffers[x]);
+    }
+    std::cout << "allright2" << '\n';
+    system("pause");
+    for (cl_uint x = 0; x < itersPerEpoch-1; ++x) {
+        //std::cout << "releasing obj num" << x;
+        clReleaseMemObject(inputBuffer[x]);
+        std::cout << "allright2.5" << '\n';
+        system("pause");
+        _aligned_free(correctOutput[x]);
+    }
+    std::cout << "allright3" << '\n';
+    system("pause");
+    _aligned_free(weightBuffers);
+    _aligned_free(biasBuffers);
+    _aligned_free(outputBuffers);
+    _aligned_free(deltaBuffers);
+    _aligned_free(inputBuffer);
+    _aligned_free(costs);
 }
 
 //Testing correctness and measuring latency of new kernels
@@ -2722,18 +2752,22 @@ cl_int kernelCorrectnessTesting(ocl_args_d_t* ocl, char** activationFunctionKern
  
     cl_uint optimizedSizeTempA = ((sizeof(cl_float) * mDim * pDim - 1) / 64 + 1) * 64;
     cl_uint optimizedSizeTempB = ((sizeof(cl_float) * pDim * nDim - 1) / 64 + 1) * 64;
+    cl_uint optimizedSizeTempBiases = ((sizeof(cl_float) * mDim - 1) / 64 + 1) * 64;
     cl_uint optimizedSizeTempC = ((sizeof(cl_float) * mDim * nDim - 1) / 64 + 1) * 64;
     cl_float* matrixAar = (cl_float*)_aligned_malloc(optimizedSizeTempA, 4096);
     cl_float* matrixBar = (cl_float*)_aligned_malloc(optimizedSizeTempB, 4096);
+    cl_float* biasesar = (cl_float*)_aligned_malloc(optimizedSizeTempBiases, 4096);
     cl_float* auxiliaryMatrixar = (cl_float*)_aligned_malloc(optimizedSizeTempC, 4096);
     mGenerateMatrices(matrixAar, mDim, pDim);
     mGenerateMatrices(matrixBar, pDim, nDim);
-    mGenerateMatrices(auxiliaryMatrixar, mDim, nDim);
+    mGenerateMatrices(auxiliaryMatrixar, pDim, nDim);
+    mGenerateMatrices(biasesar, mDim, 1);
 
 
     // Create first buffer based on host memory inputA
     cl_mem matrixA = clCreateBuffer(ocl->context, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR, sizeof(cl_float) * mDim * pDim, matrixAar, &err);
     cl_mem matrixB = clCreateBuffer(ocl->context, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR, sizeof(cl_float) * pDim * nDim, matrixBar, &err);
+    cl_mem biases = clCreateBuffer(ocl->context, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR, sizeof(cl_float) * mDim, biasesar, &err);
     cl_mem matrixC = clCreateBuffer(ocl->context, CL_MEM_READ_WRITE, sizeof(cl_float) * mDim * nDim, NULL, &err);
     cl_mem matrixD = clCreateBuffer(ocl->context, CL_MEM_READ_WRITE, sizeof(cl_float) * mDim * nDim, NULL, &err);
     cl_mem auxiliaryMatrix = clCreateBuffer(ocl->context, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR, sizeof(cl_float) * mDim*nDim, auxiliaryMatrixar, &err);
@@ -2745,6 +2779,7 @@ cl_int kernelCorrectnessTesting(ocl_args_d_t* ocl, char** activationFunctionKern
 
     _aligned_free(matrixAar);
     _aligned_free(matrixBar);
+    _aligned_free(biasesar);
     _aligned_free(auxiliaryMatrixar);
 
     cl_uint optimizedSizeNetworkOutput = ((sizeof(cl_float) * mDim * nDim - 1) / 64 + 1) * 64;
@@ -2762,11 +2797,9 @@ cl_int kernelCorrectnessTesting(ocl_args_d_t* ocl, char** activationFunctionKern
     for (int kernelIdx = 0; kernelIdx < numActivationFunctions; ++kernelIdx) {
         outputIsCorrect = true;
         // NEW KERNEL -----------------------------------------------------------------------------------------
-
-
         ocl->kernel = activationFunctionKernels[kernelIdx];
         ocl->dstMem = matrixC;
-        if (CL_SUCCESS != mSetKernelArguments(ocl, NULL, mDim, pDim, nDim, 0.0, 1))
+        if (CL_SUCCESS != mSetKernelArguments(ocl, &biases, mDim, pDim, nDim, 0.0, 1))
         {
             return -1;
         }
@@ -2790,7 +2823,7 @@ cl_int kernelCorrectnessTesting(ocl_args_d_t* ocl, char** activationFunctionKern
         ocl->kernel = activationFunctionKernelsSimple[kernelIdx];
         ocl->dstMem = matrixD;
         // Passing arguments into OpenCL kernel.
-        if (CL_SUCCESS != mSetKernelArguments(ocl, NULL, mDim, pDim, nDim, 0.0, 1))
+        if (CL_SUCCESS != mSetKernelArguments(ocl, &biases, mDim, pDim, nDim, 0.0, 1))
         {
             return -1;
         }
@@ -2879,10 +2912,10 @@ cl_int kernelCorrectnessTesting(ocl_args_d_t* ocl, char** activationFunctionKern
         }
 
         if (outputIsCorrect) {
-            std::cout << "Kernel " << activationFunctionKernelNames[kernelIdx] << " PASSES" << '\n';
+            std::cout << "Kernel " << activationFunctionDeltaKernelNames[kernelIdx] << " PASSES" << '\n';
         }
         else {
-            std::cout << "Kernel " << activationFunctionKernelNames[kernelIdx] << " FAILS" << '\n';
+            std::cout << "Kernel " << activationFunctionDeltaKernelNames[kernelIdx] << " FAILS" << '\n';
         }
     }
 
@@ -2896,7 +2929,7 @@ cl_int kernelCorrectnessTesting(ocl_args_d_t* ocl, char** activationFunctionKern
         LogError("Error: clCreateKernel returned %s\n", TranslateOpenCLError(err));
         return -1;
     }
-    if (CL_SUCCESS != mSetKernelArguments(ocl, NULL, mDim, pDim, nDim, learning_rate, 3))
+    if (CL_SUCCESS != mSetKernelArguments(ocl, &biases, mDim, pDim, nDim, learning_rate, 3))
     {
         return -1;
     }
@@ -2917,7 +2950,7 @@ cl_int kernelCorrectnessTesting(ocl_args_d_t* ocl, char** activationFunctionKern
         LogError("Error: clCreateKernel returned %s\n", TranslateOpenCLError(err));
         return -1;
     }
-    if (CL_SUCCESS != mSetKernelArguments(ocl, NULL, mDim, pDim, nDim, learning_rate, 3))
+    if (CL_SUCCESS != mSetKernelArguments(ocl, &biases, mDim, pDim, nDim, learning_rate, 3))
     {
         return -1;
     }
@@ -2948,22 +2981,30 @@ cl_int kernelCorrectnessTesting(ocl_args_d_t* ocl, char** activationFunctionKern
 }
 
 //This function takes multiple measurements of latency and returns average for a specific set of dimensions
-cl_int kernelLatencyTestingAuxiliary(ocl_args_d_t* ocl, cl_kernel* activationFunctionKernels,
-    const size_t global[2], const size_t local[2], int mDim, int pDim, int nDim, int iterations) {
+cl_int kernelLatencyTestingAuxiliary(ocl_args_d_t* ocl, cl_kernel* activationFunctionKernels, 
+    const size_t global[2], const size_t local[2], int mDim, int pDim, int nDim, int iterations, int typeOfKernel) {
     //Testing matrices where each dimension has a different value
     cl_int err;
 
     cl_uint optimizedSizeTempA = ((sizeof(cl_float) * mDim * pDim - 1) / 64 + 1) * 64;
     cl_uint optimizedSizeTempB = ((sizeof(cl_float) * pDim * nDim - 1) / 64 + 1) * 64;
     cl_uint optimizedSizeTempC = ((sizeof(cl_float) * mDim * nDim - 1) / 64 + 1) * 64;
+    cl_uint optimizedSizeTempBiases = ((sizeof(cl_float) * mDim - 1) / 64 + 1) * 64;
+    cl_uint optimizedSizeTempOutputs = ((sizeof(cl_float) * mDim * nDim - 1) / 64 + 1) * 64;
     cl_float* matrixAar = (cl_float*)_aligned_malloc(optimizedSizeTempA, 4096);
     cl_float* matrixBar = (cl_float*)_aligned_malloc(optimizedSizeTempB, 4096);
+    cl_float* matrixBiasesar = (cl_float*)_aligned_malloc(optimizedSizeTempBiases, 4096);
+    cl_float* matrixOutputsar = (cl_float*)_aligned_malloc(optimizedSizeTempOutputs, 4096);
     mGenerateMatrices(matrixAar, mDim, pDim);
     mGenerateMatrices(matrixBar, pDim, nDim);
+    mGenerateMatrices(matrixBiasesar, mDim, 1);
+    mGenerateMatrices(matrixOutputsar, mDim, nDim);
 
     cl_mem matrixA = clCreateBuffer(ocl->context, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR, sizeof(cl_float) * mDim * pDim, matrixAar, &err);
     cl_mem matrixB = clCreateBuffer(ocl->context, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR, sizeof(cl_float) * pDim * nDim, matrixBar, &err);
     cl_mem matrixC = clCreateBuffer(ocl->context, CL_MEM_READ_WRITE, sizeof(cl_float) * mDim * nDim, NULL, &err);
+    cl_mem matrixBiases = clCreateBuffer(ocl->context, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR, sizeof(cl_float) * mDim, matrixBiasesar, &err);
+    cl_mem matrixOutputs = clCreateBuffer(ocl->context, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR, sizeof(cl_float) * mDim * nDim, matrixOutputsar, &err);
     if (CL_SUCCESS != err)
     {
         LogError("Error: matrix creation failed with %s\n", TranslateOpenCLError(err));
@@ -2972,6 +3013,8 @@ cl_int kernelLatencyTestingAuxiliary(ocl_args_d_t* ocl, cl_kernel* activationFun
 
     _aligned_free(matrixAar);
     _aligned_free(matrixBar);
+    _aligned_free(matrixBiasesar);
+    _aligned_free(matrixOutputsar);
     int arraySize = mDim * nDim;
 
     ocl->srcA = matrixA;
@@ -2982,14 +3025,27 @@ cl_int kernelLatencyTestingAuxiliary(ocl_args_d_t* ocl, cl_kernel* activationFun
 
     cl_uint timesSize = ((sizeof(long long) * iterations - 1) / 64 + 1) * 64;
     long long* times = (long long*)_aligned_malloc(timesSize, 4096);
-
     for (int iter = 0; iter < iterations; iter++) {
 
-        ocl->kernel = activationFunctionKernels[0];
+        ocl->kernel = *activationFunctionKernels;
         ocl->dstMem = matrixC;
-        if (CL_SUCCESS != mSetKernelArguments(ocl, NULL, mDim, pDim, nDim, 0.0, 1))
-        {
-            return -1;
+        if (typeOfKernel == 1) {
+            if (CL_SUCCESS != mSetKernelArguments(ocl, &matrixBiases, mDim, pDim, nDim, 0.0, 1))
+            {
+                return -1;
+            }
+        }
+        else if (typeOfKernel == 2) {
+            if (CL_SUCCESS != mSetKernelArguments(ocl, &matrixOutputs, mDim, pDim, nDim, 0.0, 2))
+            {
+                return -1;
+            }
+        }
+        else {
+            if (CL_SUCCESS != mSetKernelArguments(ocl, &matrixBiases, mDim, pDim, nDim, 0.1f, 3))
+            {
+                return -1;
+            }
         }
 
         start = high_resolution_clock::now();
@@ -3013,6 +3069,8 @@ cl_int kernelLatencyTestingAuxiliary(ocl_args_d_t* ocl, cl_kernel* activationFun
     clReleaseMemObject(matrixA);
     clReleaseMemObject(matrixB);
     clReleaseMemObject(matrixC);
+    clReleaseMemObject(matrixBiases);
+    clReleaseMemObject(matrixOutputs);
     _aligned_free(times);
 
     std::cout << "Average time is " << avg << '\n';
@@ -3021,20 +3079,23 @@ cl_int kernelLatencyTestingAuxiliary(ocl_args_d_t* ocl, cl_kernel* activationFun
 }
 
 //In contrast to kernelCorrectnessTesting, this function takes multiple measurements of latency and returns average over many different sets of dimensions
-void kernelLatencyTesting(ocl_args_d_t* ocl, cl_kernel* activationFunctionKernels,int iterations, int WGS, int TW) {
+void kernelLatencyTesting(ocl_args_d_t* ocl, cl_kernel* activationFunctionKernel,int iterations, int WGS, int TW, int typeOfKernel) {
 
     int values[4] = { 128, 256, 512, 1024 };
     const size_t local[2] = { WGS, WGS / TW };
     int mDim, nDim;
+
+
+
     for (int idx = 0; idx < 4; ++idx) {
         mDim = values[idx];
         nDim = values[idx] / TW;
         const size_t global[2] = {mDim, nDim};
         std::cout << "measuring for matrices of dimension " << mDim << '\n';
         if (WGS == 0) //No work group size defined
-            kernelLatencyTestingAuxiliary(ocl, activationFunctionKernels, global, NULL, mDim, values[idx], nDim, iterations);
+            kernelLatencyTestingAuxiliary(ocl, activationFunctionKernel, global, NULL, mDim, values[idx], nDim, iterations, typeOfKernel);
         else
-            kernelLatencyTestingAuxiliary(ocl, activationFunctionKernels, global, local, mDim, values[idx], nDim, iterations);
+            kernelLatencyTestingAuxiliary(ocl, activationFunctionKernel, global, local, mDim, values[idx], nDim, iterations, typeOfKernel);
     }
 }
 
@@ -3133,7 +3194,7 @@ int _tmain(int argc, TCHAR* argv[])
     std::cout << "There are " << numTrainImages << " with size " << valImageSize << '\n';
     std::cout << "First image label is " << (cl_float)trainingLabels[0] << '\n';
 
-    int epochs = 35;
+    int epochs = 10;
     int classes = 10;
 
     
@@ -3141,14 +3202,15 @@ int _tmain(int argc, TCHAR* argv[])
     //MAIN LOOP
     //{
     //    int TS = 16;
-    //    mDim = 512, pDim = 512, nDim = 1024;
+    //    mDim = 1024, pDim = 784, nDim = 512;
     //    int WPT = 8;
-    //    const size_t global[2] = { mDim, nDim / WPT };
-    //    const size_t local[2] = { TS, TS / WPT };
+    //    const size_t global[2] = { mDim, nDim/WPT };
+    //    const size_t local[2] = { TS, TS/WPT};
     //    kernelCorrectnessTesting(&ocl, activationFunctionKernelNames, activationFunctionDeltaKernelNames, activationFunctionKernels,
     //        activationFunctionDeltaKernels, activationFunctionKernelsSimple, activationFunctionDeltaKernelsSimple, global,
     //        local, numAF, mDim, pDim, nDim);
     //}
+    //system("pause");
 
     //int optimizedSize = ((sizeof(float) * 1024 - 1) / 64 + 1) * 64;
     //float* ar1 = (float*)_aligned_malloc(optimizedSize, 4096);
@@ -3163,19 +3225,20 @@ int _tmain(int argc, TCHAR* argv[])
     //system("pause");
 
     //{
-    //    int TW = 8;
+    //    int TW = 1;
     //    int WGS = 16; //set to 0 to disable manual local size setting
     //    int iterations = 50;
-    //    kernelLatencyTesting(&ocl, activationFunctionKernels, iterations, WGS, TW);
+    //    int typeOfKernel = 1; //1 through 3
+    //    kernelLatencyTesting(&ocl, &activationFunctionDeltaKernels[0], iterations, WGS, TW, typeOfKernel);
     //}
 
 
 
-    minibatchGD(&ocl, dimAr, activationFunctions, activationFunctionKernels, activationFunctionKernelsSimple,
-        activationFunctionDeltaKernels, activationFunctionDeltaKernelsSimple, batchSize, layers, classes, epochs,
-        trainingDataset, trainingLabels, numTrainImages, valDataset, valLabels, numValImages);
+    //minibatchGD(&ocl, dimAr, activationFunctions, activationFunctionKernels, activationFunctionKernelsSimple,
+    //    activationFunctionDeltaKernels, activationFunctionDeltaKernelsSimple, batchSize, layers, classes, epochs,
+    //    trainingDataset, trainingLabels, numTrainImages, valDataset, valLabels, numValImages);
 
-    system("pause");
+    //system("pause");
     
     //float** weightsArray;
     //cl_mem* weightBuffers, * outputBuffers, * deltaBuffers, inputBuffer;

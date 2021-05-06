@@ -8,7 +8,7 @@
 #define UNROLLFACTOR 8
 
 __kernel void Multiply_Buffer_Identity(global float* matrixA, global float* matrixB, global float* matrixC,
-const int mDim, const int pDim, const int nDim)
+const int mDim, const int pDim, const int nDim, global float* biases)
 {
  // Thread identifiers
     const int row = get_local_id(0); // Local row ID (max: TS)
@@ -58,7 +58,7 @@ const int mDim, const int pDim, const int nDim)
     // Store the final results in C
     __attribute__((opencl_unroll_hint(UNROLLFACTOR)))
     for (int w=0; w<WPT; ++w) {
-        matrixC[(globalCol + w*RTS) + globalRow*nDim] = acc[w];
+        matrixC[(globalCol + w*RTS) + globalRow*nDim] = acc[w]+biases[globalRow];
     }
     //printf("id IBuffer is %d %d, final value is %f \n \n \n ", globalRow, globalCol, acc);
 }
@@ -66,7 +66,7 @@ const int mDim, const int pDim, const int nDim)
 
 
 __kernel void Multiply_Buffer_Sigmoid(global float* matrixA, global float* matrixB, global float* matrixC,
-const int mDim, const int pDim, const int nDim)
+const int mDim, const int pDim, const int nDim, global float* biases)
 {
  // Thread identifiers
     const int row = get_local_id(0); // Local row ID (max: TS)
@@ -116,12 +116,12 @@ const int mDim, const int pDim, const int nDim)
     // Store the final results in C
     __attribute__((opencl_unroll_hint(UNROLLFACTOR)))
     for (int w=0; w<WPT; ++w) {
-        matrixC[(globalCol + w*RTS) + globalRow*nDim] = 1.0 / (1.0 + exp(-acc[w]));
+        matrixC[(globalCol + w*RTS) + globalRow*nDim] = 1.0 / (1.0 + exp(-acc[w]-biases[globalRow]));
     }
 }
 
 __kernel void Multiply_Buffer_Tanh(global float* matrixA, global float* matrixB, global float* matrixC,
-const int mDim, const int pDim, const int nDim)
+const int mDim, const int pDim, const int nDim, global float* biases)
 {
  // Thread identifiers
     const int row = get_local_id(0); // Local row ID (max: TS)
@@ -171,12 +171,12 @@ const int mDim, const int pDim, const int nDim)
     // Store the final results in C
     __attribute__((opencl_unroll_hint(UNROLLFACTOR)))
     for (int w=0; w<WPT; ++w) {
-        matrixC[(globalCol + w*RTS) + globalRow*nDim] = tanh(acc[w]);
+        matrixC[(globalCol + w*RTS) + globalRow*nDim] = tanh(acc[w]+biases[globalRow]);
     }
 }
 
 __kernel void Multiply_Buffer_ReLU(global float* matrixA, global float* matrixB, global float* matrixC,
-const int mDim, const int pDim, const int nDim)
+const int mDim, const int pDim, const int nDim, global float* biases)
 {
  // Thread identifiers
     const int row = get_local_id(0); // Local row ID (max: TS)
@@ -226,7 +226,7 @@ const int mDim, const int pDim, const int nDim)
     // Store the final results in C
     __attribute__((opencl_unroll_hint(UNROLLFACTOR)))
     for (int w=0; w<WPT; ++w) {
-        matrixC[(globalCol + w*RTS) + globalRow*nDim] = fmax(acc[w],0);
+        matrixC[(globalCol + w*RTS) + globalRow*nDim] = fmax(acc[w]+biases[globalRow],0);
     }
 }
 
@@ -337,7 +337,7 @@ const int mDim, const int pDim, const int nDim, global float* matrixD)
     // Store the final results in C
     __attribute__((opencl_unroll_hint(UNROLLFACTOR)))
     for (int w=0; w<WPT; ++w) {
-        matrixC[(globalCol + w*RTS) + globalRow*nDim] = clamp((float)(acc[w]* matrixD[(globalCol + w*RTS) + globalRow*nDim] * (1.0 - matrixD[(globalCol + w*RTS) + globalRow*nDim])),-0.005f,0.005f);
+        matrixC[(globalCol + w*RTS) + globalRow*nDim] = clamp((float)(acc[w]* matrixD[(globalCol + w*RTS) + globalRow*nDim] * (1.0f - matrixD[(globalCol + w*RTS) + globalRow*nDim])),-0.005f,0.005f);
     }
 }
 
@@ -450,7 +450,7 @@ const int mDim, const int pDim, const int nDim, global float* matrixD)
 }
 
 __kernel void Update_Weights_Buffers(global float* matrixA, global float* matrixB, global float* matrixC
-,const int mDim, const int pDim, const int nDim, const float offset)
+,const int mDim, const int pDim, const int nDim, global float* biases, const float offset)
 {
 // Thread identifiers
     const int row = get_local_id(0); // Local row ID (max: TS)
@@ -500,5 +500,12 @@ __kernel void Update_Weights_Buffers(global float* matrixA, global float* matrix
     __attribute__((opencl_unroll_hint(UNROLLFACTOR)))
     for (int w=0; w<WPT; ++w) {
         matrixC[(globalCol + w*RTS) + globalRow*nDim] = matrixC[(globalCol + w*RTS) + globalRow*nDim] - offset*acc[w]/(float)pDim;
-    } 
+    }
+    if (globalCol==0){
+        float tempBias=0.0f;
+        for (int p = 0 ; p < pDim; p++){
+            tempBias+= matrixA[globalRow*pDim+p];
+        }
+        biases[globalRow] = biases[globalRow] - offset*tempBias / (float)pDim;
+    }
 }

@@ -90,23 +90,6 @@ const int mDim, const int pDim, const int nDim)
     }
 }*/
 
-__kernel void Matrix_Multiply_Kernel_1(global float* matrixA, global float* matrixB, global float* matrixC,
-const int mDim, const int pDim, const int nDim )
-{
-    const int r = get_global_id(0);
-    const int c = get_global_id(1);
-    float finalValue = 0.0;
-    //printf("start IBuffer %d %d \n", r, c);
-    //printf("pls IBuffer be right %d %d should be %f %f and ndim is %d\n", r, c, matrixB[0], matrixB[1], nDim);
-    for (int p = 0 ; p < pDim ; p++){
-        finalValue+=matrixA[pDim*r+p]*matrixB[nDim*p+c];
-        //printf("id is %d %d, values are %f %f \n ", r, c, matrixA[pDim*r+p], matrixB[nDim*p+c] );
-    }
-    matrixC[r*nDim+c] = finalValue;
-    //printf("id IBuffer is %d %d, final value is %f \n \n \n ", r, c, finalValue);
-    //printf("id IBuffer is %d %d, post function appied is %f \n \n \n ", r, c, finalValue);
-}
-
 
 __kernel void Multiply_Buffer_Identity(global float* matrixA, global float* matrixB, global float* matrixC,
 const int mDim, const int pDim, const int nDim, global float* biases)
@@ -120,6 +103,9 @@ const int mDim, const int pDim, const int nDim, global float* biases)
     }
     matrixC[r*nDim+c] = finalValue+biases[r];
     #if DEBUG_FORWARD == true
+        if (r==0 && c==0){
+            printf("in mul id kernel 1\n");
+        }
         printf("Identity forward is %d %d, is %f \n", r, c, matrixC[r*nDim+c]);
     #endif
 }
@@ -136,6 +122,9 @@ const int mDim, const int pDim, const int nDim, global float* biases )
     }
     matrixC[r*nDim+c] = 1.0 / (1.0 + exp(-finalValue-biases[r]));
     #if DEBUG_FORWARD
+        if (r==0 && c==0){
+            printf("in mul sigmoid kernel 1\n");
+        }
         printf("Sigmoid forward %d %d, is %f \n", r, c, matrixC[r*nDim+c]);
     #endif
 }
@@ -152,6 +141,9 @@ const int mDim, const int pDim, const int nDim, global float* biases )
     }
     matrixC[r*nDim+c] = tanh(finalValue+biases[r]);
     #if DEBUG_FORWARD
+        if (r==0 && c==0){
+            printf("in mul tanh kernel 1\n");
+        }
         printf("Tanh forward %d %d, is %f \n", r, c, matrixC[r*nDim+c]);
     #endif
 }
@@ -168,6 +160,9 @@ const int mDim, const int pDim, const int nDim, global float* biases )
     }
     matrixC[r*nDim+c] = fmax(finalValue+biases[r],0);
     #if DEBUG_FORWARD
+        if (r==0 && c==0){
+            printf("in mul relu kernel 1\n");
+        }
         printf("ReLU forward %d %d, is %f \n", r, c, matrixC[r*nDim+c]);
     #endif
 }
@@ -189,7 +184,11 @@ const int lNew, const int lOld, const int batchSize, global float* outputs)
 
     deltasMatrixNew[x*batchSize + y] = clamp((float)temp,-0.005f,0.005f);
     #if DEBUG_DELTAS
-        printf("Identity Deltas %d %d, is %f \n", r, c, matrixC[r*nDim+c]);
+        if (x==0 && y==0){
+            printf("in delta id kernel 1\n");
+            printf("dimensions are %d %d %d 1\n", lNew, lOld, batchSize);
+        }
+        //printf("Identity Deltas %d %d, is %f \n", r, c, matrixC[r*nDim+c]);
     #endif
 }
 
@@ -205,9 +204,13 @@ const int lNew, const int lOld, const int batchSize, global float* outputs)
         B = deltasMatrixOld[p*batchSize+y];
         temp+=A*B;
     }
-    deltasMatrixNew[x*batchSize + y] = clamp((float)temp * outputs[x*batchSize+y] * (1.0f - outputs[x*batchSize+y]) , -0.005f , 0.005f);
+    deltasMatrixNew[x*batchSize + y] = clamp((float)(temp * outputs[x*batchSize+y] * (1.0f - outputs[x*batchSize+y])) , -0.005f , 0.005f);
     #if DEBUG_DELTAS
-        printf("Sigmoid Deltas %d %d, is %f \n", r, c, matrixC[r*nDim+c]);
+        if (x==0 && y==0){
+            printf("in delta sigmoid kernel 1\n");
+            printf("dimensions are %d %d %d 1\n", lNew, lOld, batchSize);
+        }
+        //printf("Sigmoid Deltas %d %d, is %f \n", r, c, matrixC[r*nDim+c]);
     #endif
 }
 
@@ -226,7 +229,11 @@ const int lNew, const int lOld, const int batchSize, global float* outputs)
 
     deltasMatrixNew[x*batchSize + y] = clamp((float)(temp * (1.0f - pow(outputs[x*batchSize+y],2))),-0.005f,0.005f);
     #if DEBUG_DELTAS
-        printf("Tanh Deltas %d %d, is %f \n", r, c, matrixC[r*nDim+c]);
+        if (x==0 && y==0){
+            printf("in delta tanh kernel 1\n");
+            printf("dimensions are %d %d %d 1\n", lNew, lOld, batchSize);
+        }
+        //printf("Tanh Deltas %d %d, is %f \n", r, c, matrixC[r*nDim+c]);
     #endif
 }
 
@@ -245,7 +252,11 @@ const int lNew, const int lOld, const int batchSize, global float* outputs)
 
     deltasMatrixNew[x*batchSize + y] = clamp((float)(temp * (outputs[x*batchSize + y] > 0.0? 1.0:0.0)),-0.005f,0.005f);
     #if DEBUG_DELTAS
-        printf("ReLU Deltas %d %d, is %f \n", r, c, matrixC[r*nDim+c]);
+        if (x==0 && y==0){
+            printf("in delta relu kernel 1\n");
+            printf("dimensions are %d %d %d 1\n", lNew, lOld, batchSize);
+        }
+        //printf("ReLU Deltas %d %d, is %f \n", r, c, matrixC[r*nDim+c]);
     #endif
 }
 
@@ -267,6 +278,9 @@ __kernel void Update_Weights_Buffers(global float* deltasMatrix, global float* o
 
     weightsMatrix[x*outputsDim + y] = weightsMatrix[x*outputsDim + y] - temp;
     #if DEBUG_UPDATE
+        if (x==0&&y==0){
+            printf("in weight update kernel 1");
+        }
         printf("Update %d %d, is %f \n", r, c, matrixC[r*nDim+c]);
     #endif
 
