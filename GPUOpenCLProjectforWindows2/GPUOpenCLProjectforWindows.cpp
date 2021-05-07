@@ -709,7 +709,7 @@ int CreateAndBuildProgram(ocl_args_d_t *ocl)
     // The size of the C program is returned in sourceSize
     char* source = NULL;
     size_t srcSize = 0;
-    err = ReadSourceFromFile("kernel2.cl", &source, &srcSize);
+    err = ReadSourceFromFile("kernel3.cl", &source, &srcSize);
     if (CL_SUCCESS != err)
     {
         LogError("Error: ReadSourceFromFile returned %s.\n", TranslateOpenCLError(err));
@@ -1478,8 +1478,6 @@ cl_uint backpropClassifier(ocl_args_d_t* ocl, cl_mem* buffersWeightsArray, cl_me
         }
     }
 
-    std::cout << "Lets see whats going on here" << '\n';
-
     //perform weight updates now. We can potentially parallelize this fully even across all network layers
     //but for now it's only across the weights of each layer and then sequentially across layers
     pDim = batchSize;
@@ -2066,7 +2064,7 @@ cl_uint backprop1(ocl_args_d_t* ocl, cl_mem* buffersWeightsArray, cl_mem* buffer
 //A = weights, B = outputs for layer l-1, C = outputs for l, 
 //where l is the current layer visited in this iteration of the forwardpassCpp loop
 void multiplyIdKernelCpp(float* matrixA, float* matrixB, float* matrixC,
-    const int mDim, const int pDim, const int nDim) {
+    const int mDim, const int pDim, const int nDim, float* biasesArray) {
     int idx;
     float temp;
     for (int i = 0; i < mDim; i++) {
@@ -2076,7 +2074,8 @@ void multiplyIdKernelCpp(float* matrixA, float* matrixB, float* matrixC,
             for (int k = 0; k < pDim; k++) {
                 temp += matrixA[i * pDim + k] * matrixB[j + k * nDim];
             }
-            matrixC[idx] = temp;
+            matrixC[idx] = temp+ biasesArray[i];
+            //std::cout << "le IDENTITY issa " << matrixC[idx] << '\n';
         }
     }
 }
@@ -2086,7 +2085,7 @@ void multiplyIdKernelCpp(float* matrixA, float* matrixB, float* matrixC,
 //A = weights, B = outputs for layer l-1, C = outputs for l, 
 //where l is the current layer visited in this iteration of the forwardpassCpp loop
 void multiplySigmoidKernelCpp( float* matrixA, float* matrixB, float* matrixC,
-    const int mDim, const int pDim, const int nDim) {
+    const int mDim, const int pDim, const int nDim, float* biasesArray) {
     int idx;
     float temp;
     for (int i = 0; i < mDim; i++) {
@@ -2096,7 +2095,7 @@ void multiplySigmoidKernelCpp( float* matrixA, float* matrixB, float* matrixC,
             for (int k = 0; k< pDim; k++) {
                 temp += matrixA[i*pDim+k] * matrixB[j+k*nDim];
             }
-            matrixC[idx] = (tanh(temp/2)+1)/2; //expressed sig as tanh because sig is not implemented in cmath
+            matrixC[idx] = (tanh((temp+ biasesArray[i])/2)+1)/2; //expressed sig as tanh because sig is not implemented in cmath
         }
     }
 }
@@ -2106,7 +2105,7 @@ void multiplySigmoidKernelCpp( float* matrixA, float* matrixB, float* matrixC,
 //A = weights, B = outputs for layer l-1, C = outputs for l, 
 //where l is the current layer visited in this iteration of the forwardpassCpp loop
 void multiplyTanhKernelCpp(float* matrixA, float* matrixB, float* matrixC,
-    const int mDim, const int pDim, const int nDim) {
+    const int mDim, const int pDim, const int nDim, float* biasesArray) {
     int idx;
     float temp;
     for (int i = 0; i < mDim; i++) {
@@ -2116,7 +2115,7 @@ void multiplyTanhKernelCpp(float* matrixA, float* matrixB, float* matrixC,
             for (int k = 0; k < pDim; k++) {
                 temp += matrixA[i * pDim + k] * matrixB[j + k * nDim];
             }
-            matrixC[idx] = tanh(temp);
+            matrixC[idx] = tanh(temp+biasesArray[i]);
         }
     }
 }
@@ -2126,7 +2125,7 @@ void multiplyTanhKernelCpp(float* matrixA, float* matrixB, float* matrixC,
 //A = weights, B = outputs for layer l-1, C = outputs for l,
 //where l is the current layer visited in this iteration of the forwardpassCpp loop
 void multiplyReLUKernelCpp(float* matrixA, float* matrixB, float* matrixC,
-    const int mDim, const int pDim, const int nDim) {
+    const int mDim, const int pDim, const int nDim, float* biasesArray) {
     int idx;
     float temp;
     //printinn(matrixA, matrixB, matrixC, mDim, pDim, nDim);
@@ -2138,7 +2137,7 @@ void multiplyReLUKernelCpp(float* matrixA, float* matrixB, float* matrixC,
                 temp += matrixA[i * pDim + k] * matrixB[j + k * nDim];
             }
             //std::cout << "le output pre relu issa " << temp << '\n';
-            matrixC[idx] = fmax(temp,0.0f);
+            matrixC[idx] = fmax(temp+biasesArray[i],0.0f);
             //std::cout << "le output post relu issa " << matrixC[idx] << '\n';
         }
     }
@@ -2159,7 +2158,7 @@ void multiplyDeltasId(float* matrixA, float* matrixB, float* matrixC,
             for (int k = 0; k < pDim; k++) {
                 temp += matrixA[i + k * mDim] * matrixB[j + k * nDim];
             }
-            matrixC[idx] = temp;
+            matrixC[idx] = fmin(fmax(temp,-0.005f),0.005f);
         }
     }
 }
@@ -2179,7 +2178,7 @@ void multiplyDeltasSigmoid(float* matrixA, float* matrixB, float* matrixC,
             for (int k = 0; k < pDim; k++) {
                 temp += matrixA[i + k * mDim] * matrixB[j + k * nDim];
             }
-            matrixC[idx] = temp * matrixD[idx] * (1.0f - matrixD[idx]);
+            matrixC[idx] = fmin(fmax(temp * matrixD[idx] * (1.0f - matrixD[idx]),-0.005f),0.005f);
         }
     }
 }
@@ -2199,7 +2198,7 @@ void multiplyDeltasTanh(float* matrixA, float* matrixB, float* matrixC,
             for (int k = 0; k < pDim; k++) {
                 temp += matrixA[i + k * mDim] * matrixB[j + k * nDim];
             }
-            matrixC[idx] = temp * (1.0f - pow(matrixD[idx], 2));
+            matrixC[idx] = fmin(fmax(temp * (1.0f - pow(matrixD[idx], 2)),-0.005f),0.005f);
         }
     }
 }
@@ -2219,7 +2218,7 @@ void multiplyDeltasReLU(float* matrixA, float* matrixB, float* matrixC,
             for (int k = 0; k < pDim; k++) {
                 temp += matrixA[i + k * mDim] * matrixB[j + k * nDim];
             }
-            matrixC[idx] = temp* (matrixD[idx] > 0.0 ? 1.0 : 0.0);
+            matrixC[idx] = fmin(fmax(temp* (matrixD[idx] > 0.0 ? 1.0 : 0.0),-0.005f),0.005f);
         }
     }
 }
@@ -2228,24 +2227,379 @@ void multiplyDeltasReLU(float* matrixA, float* matrixB, float* matrixC,
 //x is normal matrix multiplication, * is element wise
 //A = deltas, B = outputs, C = weights, offset = learning rate
 void updateWeights(float* matrixA, float* matrixB, float* matrixC,
-    const int mDim, const int pDim, const int nDim, const float offset)
+    const int mDim, const int pDim, const int nDim, float* biasesArray, const float offset)
 {
+    std::cout << "IN THE UPDATESSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS" << '\n';
     float temp;
     int idx1, idx2;
     for (int i = 0; i < mDim; i++) {
+        idx1 = i * pDim;
         for (int j = 0; j < nDim; j++) {
             temp = 0.0f;
-            idx1 = i * pDim;
             idx2 = j * pDim;
             for (int k = 0; k < pDim; k++) {
                 temp += matrixA[idx1 + k] * matrixB[idx2 + k];
+                //std::cout << "delta val is " << matrixA[idx1 + k] << '\n';
+                //std::cout << "output val is " << matrixB[idx2 + k] << '\n';
             }
             temp = temp / (float)pDim;
             matrixC[i * nDim + j] = matrixC[i * nDim + j] - offset * temp;
+            //std::cout << matrixC[i * nDim + j]<<'\n';
+            //std::cout << "after update is " << matrixC[i * nDim + j] << '\n';
+        }
+        temp = 0.0f;
+        for (int j = 0; j < pDim; ++j) {
+            temp += matrixA[i * pDim + j];
+        }
+        temp = temp / (float)pDim;
+        biasesArray[i] = biasesArray[i] - offset * temp;
+        //std::cout << biasesArray[i] << '\n';
+    }
+    return;
+}
+//////////////////////////////////////////////////////////////////////////////////END OF KERNELS///////////////////////////////////////////////////////////////////////////////////////////
+
+void forwardpassClassifierCpp(float** weightArrays, float** biasArrays, float** outputArrays, float* inputArray, int dimensions[], int* activationFunctions, int batchSize, int layers) {
+    std::cout << "In forwardprop \n";
+    float* srcA, * srcB;
+    float* dstMem = inputArray;
+    int mDim, pDim, nDim = batchSize, kernel;
+    for (int x = 0; x < layers; ++x) {
+
+        mDim = dimensions[x + 1];
+        pDim = dimensions[x];
+
+        srcA = weightArrays[x];
+        srcB = dstMem;
+        dstMem = outputArrays[x];
+
+        kernel = activationFunctions[x];
+        switch (kernel) {
+        case 0:
+            multiplyIdKernelCpp(srcA, srcB, dstMem, mDim, pDim, nDim, biasArrays[x]);
+            break;
+        case 1:
+            multiplySigmoidKernelCpp(srcA, srcB, dstMem, mDim, pDim, nDim, biasArrays[x]);
+            break;
+        case 2:
+            multiplyTanhKernelCpp(srcA, srcB, dstMem, mDim, pDim, nDim, biasArrays[x]);
+            break;
+        case 3:
+            multiplyReLUKernelCpp(srcA, srcB, dstMem, mDim, pDim, nDim, biasArrays[x]);
+            break;
+        }
+    }
+}
+
+void backpropClassifierCpp(float** weightArrays, float** biasArrays, float** outputArrays, float** deltaArrays, float* inputArray, int* dimensions,
+    float* groundTruthArray, int* activationFunctions, float* costs, float learning_rate, int iter, int batchSize, int layers, int classes) {
+
+    //std::cout << "In backprop for iter " << iter << " \n";
+
+    cl_uint optimizedSize = ((sizeof(float) * batchSize * classes - 1) / 64 + 1) * 64;
+    float* softmaxOutputs = (float*)_aligned_malloc(optimizedSize, 4096);
+
+    optimizedSize = ((sizeof(int) * batchSize - 1) / 64 + 1) * 64;
+    int* choices = (int*)_aligned_malloc(optimizedSize, 4096);
+
+    float* preSoftmaxOutputs = outputArrays[layers - 1];
+
+    int idx, correctClass;
+    float maxval, temp;
+    for (int i = 0; i < batchSize; ++i) {
+        //std::cout << "Entering calculation for batch element " << i << "\n";
+        idx = 0;
+        temp = 0.0f;
+        maxval = -FLT_MAX;
+        correctClass = (int)groundTruthArray[i];
+        for (int j = 0; j < classes; ++j) {
+            //std::cout << "presoftmax for " << j << " th class and batch item " << i << " is " << preSoftmaxOutputs[j * batchSize + i] << '\n';
+            if (preSoftmaxOutputs[j * batchSize + i] > maxval) {
+                idx = j;
+                maxval = preSoftmaxOutputs[j * batchSize + i];
+            }
+        }
+        //system("pause");
+        choices[i] = idx;
+        //std::cout << "Correct class is " << correctClass << '\n';
+        //std::cout << "predicted class is " << idx << '\n';
+        for (int j = 0; j < classes; ++j) {
+            preSoftmaxOutputs[j * batchSize + i] = preSoftmaxOutputs[j * batchSize + i] - maxval;
+            softmaxOutputs[j * batchSize + i] = exp(preSoftmaxOutputs[j * batchSize + i]);
+            temp += exp(preSoftmaxOutputs[j * batchSize + i]);
+        }
+        for (int j = 0; j < classes; ++j) {
+            softmaxOutputs[j * batchSize + i] = softmaxOutputs[j * batchSize + i] / temp;
         }
     }
 
-    return;
+    //These delta calculation formulas correspond to a CEL cost function
+    for (int i = 0; i < batchSize; ++i) {
+        correctClass = (int)groundTruthArray[i];
+        for (int j = 0; j < classes; ++j) {
+            if (j == correctClass) {
+                deltaArrays[layers-1][j * batchSize + i] = softmaxOutputs[j * batchSize + i] - 1.0f;
+            }
+            else {
+                deltaArrays[layers-1][j * batchSize + i] = softmaxOutputs[j * batchSize + i];
+            }
+        }
+    }
+
+    costs[iter] = AccuracyFunction(groundTruthArray, choices, batchSize);
+
+    //non-output deltas calculation loop
+    float* srcA, * srcB, * dstMem;
+    dstMem = deltaArrays[layers-1];
+    int mDim, pDim, nDim = batchSize, kernel;
+    for (int x = layers - 1; x > 0; --x) {
+
+        mDim = dimensions[x];
+        pDim = dimensions[x + 1];
+        srcA = weightArrays[x];
+        srcB = dstMem;
+        dstMem = deltaArrays[x - 1];
+
+        kernel = activationFunctions[x];
+        switch (kernel) {
+        case 0:
+            multiplyDeltasId(srcA, srcB, dstMem, mDim, pDim, nDim);
+            break;
+        case 1:
+            multiplyDeltasSigmoid(srcA, srcB, dstMem, mDim, pDim, nDim, outputArrays[x - 1]);
+            break;
+        case 2:
+            multiplyDeltasTanh(srcA, srcB, dstMem, mDim, pDim, nDim, outputArrays[x - 1]);
+            break;
+        case 3:
+            multiplyDeltasReLU(srcA, srcB, dstMem, mDim, pDim, nDim, outputArrays[x - 1]);
+            break;
+        }
+    }
+
+    //perform weight updates now. We can potentially parallelize this fully even across all network layers
+    //but for now it's only across the weights of each layer and then sequentially across layers
+    pDim = batchSize;
+    for (int x = layers - 1; x >= 0; --x) {
+        //std::cout << "I'm in iteration " << x << " of the weight update loop \n";
+        mDim = dimensions[x + 1];
+        nDim = dimensions[x];
+        srcA = deltaArrays[x];
+        dstMem = weightArrays[x];
+        if (x != 0) {
+            srcB = outputArrays[x - 1];
+        }
+        else {
+            srcB = inputArray;
+        }
+        updateWeights(srcA, srcB, dstMem, mDim, pDim, nDim, biasArrays[x], learning_rate);
+    }
+}
+
+int validationClassifierCpp(float** weightArrays, float** biasArrays, float** outputArrays, int dimensions[],
+    int* activationFunctions, int layers, int classes, uchar** valDataset, uchar* valLabels, int numValImages) {
+
+    std::cout << "In validation \n";
+
+    cl_uint optimizedSize = ((sizeof(float) * dimensions[0] * numValImages - 1) / 64 + 1) * 64;
+    float* inputArray = (float*)_aligned_malloc(optimizedSize, 4096); //array of network input
+
+    for (int i = 0; i < numValImages; ++i) {
+        for (int j = 0; j < dimensions[0]; ++j) {
+            inputArray[j * numValImages + i] = (float)valDataset[i][j];
+        }
+    }
+
+    optimizedSize = ((sizeof(float) * numValImages - 1) / 64 + 1) * 64;
+    float* groundTruthArray = (float*)_aligned_malloc(optimizedSize, 4096); //array of network ground truth
+
+    for (int i = 0; i < numValImages; ++i) {
+        groundTruthArray[i] = (float)valLabels[i];
+    }
+
+
+    int mDim, pDim, nDim = numValImages;
+    for (cl_uint x = 0; x < layers; ++x) {
+        mDim = dimensions[x + 1];
+        pDim = dimensions[x];
+
+        optimizedSize = ((sizeof(float) * mDim * nDim - 1) / 64 + 1) * 64;
+        outputArrays[x] = (float*)_aligned_malloc(optimizedSize, 4096);
+    }
+
+    float* srcA, * srcB;
+    float* dstMem = inputArray;
+    int kernel;
+    for (int x = 0; x < layers; ++x) {
+
+        mDim = dimensions[x + 1];
+        pDim = dimensions[x];
+
+        srcA = weightArrays[x];
+        srcB = dstMem;
+        dstMem = outputArrays[x];
+
+        kernel = activationFunctions[x];
+        switch (kernel) {
+        case 0:
+            multiplyIdKernelCpp(srcA, srcB, dstMem, mDim, pDim, nDim, biasArrays[x]);
+            break;
+        case 1:
+            multiplySigmoidKernelCpp(srcA, srcB, dstMem, mDim, pDim, nDim, biasArrays[x]);
+            break;
+        case 2:
+            multiplyTanhKernelCpp(srcA, srcB, dstMem, mDim, pDim, nDim, biasArrays[x]);
+            break;
+        case 3:
+            multiplyReLUKernelCpp(srcA, srcB, dstMem, mDim, pDim, nDim, biasArrays[x]);
+            break;
+        }
+    }
+
+    optimizedSize = ((sizeof(float) * numValImages * classes - 1) / 64 + 1) * 64;
+    float* preSoftmaxOutputs = (float*)_aligned_malloc(optimizedSize, 4096);
+    float* softmaxOutputs = (float*)_aligned_malloc(optimizedSize, 4096);
+
+    optimizedSize = ((sizeof(int) * numValImages - 1) / 64 + 1) * 64;
+    int* choices = (int*)_aligned_malloc(optimizedSize, 4096);
+
+
+    int idx, correctClass;
+    float maxval, temp;
+    for (int i = 0; i < numValImages; ++i) {
+        idx = 0;
+        temp = 0.0f;
+        maxval = -FLT_MAX;
+        correctClass = (int)groundTruthArray[i];
+        for (int j = 0; j < classes; ++j) {
+            if (dstMem[j * numValImages + i] > maxval) {
+                idx = j;
+                maxval = dstMem[j * numValImages + i];
+            }
+        }
+        choices[i] = idx;
+        for (int j = 0; j < classes; ++j) {
+            dstMem[j * numValImages + i] = dstMem[j * numValImages + i] - maxval;
+        }
+    }
+
+    float accuracy = AccuracyFunction(groundTruthArray, choices, numValImages);
+    std::cout << "Validation set accuracy is " << accuracy << '\n';
+    return 0;
+}
+
+int minibatchGDCpp(int dimensions[], int* activationFunctions, int batchSize, int layers, int classes, int epochs, uchar** dataset, uchar* labels,
+    int numTrainImages, uchar** valDataset, uchar* valLabels, int numValImages) {
+
+    float **weightsAr;
+    float** weightArrays, ** biasArrays, ** outputArrays, ** deltaArrays, ** inputArrays, ** groundTruthArrays;
+    float* costs;
+
+    std::cout << "Num of val images is " << numValImages << '\n';
+
+    int itersPerEpoch = (numTrainImages - 1) / batchSize + 1;
+    int iterations = epochs * (itersPerEpoch - 1);
+
+    cl_uint optimizedSize = ((sizeof(float*) * layers - 1) / 64 + 1) * 64;
+    weightArrays = (float**)_aligned_malloc(optimizedSize, 4096);//array of memory objects, where each memory object is a buffer of weights between layers
+    biasArrays = (float**)_aligned_malloc(optimizedSize, 4096); //array of memory objects, where each memory object is a buffer of biases for some layer
+    outputArrays = (float**)_aligned_malloc(optimizedSize, 4096); //array of memory objects, where each memory object is a buffer image of outputs of layers
+    deltaArrays = (float**)_aligned_malloc(optimizedSize, 4096); //array of memory objects, where each memory object is an image of deltas of layers
+
+    optimizedSize = ((sizeof(float*) * (itersPerEpoch - 1) - 1) / 64 + 1) * 64;
+    inputArrays = (float**)_aligned_malloc(optimizedSize, 4096);
+    groundTruthArrays = (float**)_aligned_malloc(optimizedSize, 4096); //array of network grount truth
+
+    cl_uint optimizedSizeIn = ((sizeof(float) * dimensions[0] * batchSize - 1) / 64 + 1) * 64;
+    cl_uint optimizedSizeOut = ((sizeof(float) * batchSize - 1) / 64 + 1) * 64;
+
+    for (int iter = 0; iter < itersPerEpoch - 1; ++iter) {
+        inputArrays[iter] = (float*)_aligned_malloc(optimizedSizeIn, 4096);
+        groundTruthArrays[iter] = (float*)_aligned_malloc(optimizedSizeOut, 4096);
+        for (int i = 0; i < batchSize; ++i) {
+            for (int j = 0; j < dimensions[0]; ++j) {
+                inputArrays[iter][j * batchSize + i] = (float)dataset[i + batchSize * iter][j];
+            }
+            groundTruthArrays[iter][i] = labels[i + batchSize * iter];
+        }
+    }
+
+    int mDim, pDim;
+    for (int x = 0; x < layers; ++x) {
+        mDim = dimensions[x + 1];
+        pDim = dimensions[x];
+
+        optimizedSize = ((sizeof(float) * mDim * pDim - 1) / 64 + 1) * 64;
+        weightArrays[x] = (float*)_aligned_malloc(optimizedSize, 4096);
+        std::cout << "Weights of layer " << x << " are: \n";
+        mGenerateMatrices(weightArrays[x], mDim, pDim);
+
+        optimizedSize = ((sizeof(float) * mDim - 1) / 64 + 1) * 64;
+        biasArrays[x] = (float*)_aligned_malloc(optimizedSize, 4096);
+        std::cout << "Biases of layer " << x << " are: \n";
+        mGenerateMatrices(biasArrays[x], mDim, 1);
+
+        optimizedSize = ((sizeof(float) * mDim * batchSize - 1) / 64 + 1) * 64;
+        outputArrays[x] = (float*)_aligned_malloc(optimizedSize, 4096);
+
+        optimizedSize = ((sizeof(float) * mDim * batchSize - 1) / 64 + 1) * 64;
+        deltaArrays[x] = (float*)_aligned_malloc(optimizedSize, 4096);
+    }
+
+    //initializing weights, outputs and delta buffers
+    int optimizedSizeCosts = ((sizeof(float) * epochs * (itersPerEpoch - 1) - 1) / 64 + 1) * 64;
+    costs = (float*)_aligned_malloc(optimizedSizeCosts, 4096);
+
+    float learning_rate = 0.0008;
+    float temptot;
+    std::cout << "iters per epoch is " << (itersPerEpoch - 1) << '\n';
+    for (int epoch = 0; epoch < epochs; ++epoch) {
+        std::cout << "epoch " << epoch << " hereeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee \n";
+        learning_rate *= 0.92;
+        for (int i = 0; i < itersPerEpoch - 1; ++i) {
+            std::cout << "ENTERING Cpp FORWARD" << "\n";
+            forwardpassClassifierCpp(weightArrays, biasArrays, outputArrays, inputArrays[i], dimensions, activationFunctions, batchSize, layers);
+            std::cout << "ENTERING Cpp BACKWARD" << "\n";
+            backpropClassifierCpp(weightArrays, biasArrays, outputArrays, deltaArrays, inputArrays[i], dimensions, groundTruthArrays[i], activationFunctions, costs, learning_rate, (epoch * (itersPerEpoch - 1) + i), batchSize, layers, classes);
+        }
+        temptot = 0.0f;
+        for (int i = 0; i < itersPerEpoch - 1; ++i) {
+            temptot += costs[epoch * (itersPerEpoch - 1) + i];
+        }
+        std::cout << "average accuracy for epoch " << epoch << " is " << temptot / (itersPerEpoch - 1) << '\n';
+    }
+
+    for (int i = 0; i < iterations; i++) {
+        std::cout << costs[i] << '\n';
+    }
+
+    //For reasonably sized validation datasets, a single pass with a wide matrix is enough
+    for (cl_uint x = 0; x < layers; ++x) {
+        _aligned_free(outputArrays[x]);
+        _aligned_free(deltaArrays[x]);
+    }
+    _aligned_free(deltaArrays);
+    _aligned_free(inputArrays);
+    _aligned_free(costs);
+
+    validationClassifierCpp(weightArrays, biasArrays, outputArrays, dimensions, activationFunctions, layers, classes, valDataset, valLabels, numValImages);
+
+    for (cl_uint x = 0; x < layers; ++x) {
+        //std::cout << "releasing obj num" << x;
+        _aligned_free(weightArrays[x]);
+        _aligned_free(biasArrays[x]);
+    }
+    for (cl_uint x = 0; x < itersPerEpoch - 1; ++x) {
+        //std::cout << "releasing obj num" << x;
+        _aligned_free(inputArrays[x]);
+        _aligned_free(groundTruthArrays[x]);
+    }
+    std::cout << "Done with everything \n";
+    system("pause");
+    _aligned_free(weightArrays);
+    _aligned_free(biasArrays);
+    _aligned_free(outputArrays);
+    return 0;
 }
 
 int initializeparamsCpp(float*** weightsArray, float*** outputsArray, float*** deltasArray, float** inputArray, float** costs, int dimensions[], int batchSize, int iterations, int layers) {
@@ -2286,7 +2640,6 @@ int initializeparamsCpp(float*** weightsArray, float*** outputsArray, float*** d
         optimizedSize1 = ((sizeof(float) * mDim * batchSize - 1) / 64 + 1) * 64;
         (*deltasArray)[x] = (float*)_aligned_malloc(optimizedSize1, 4096);
     }
-
 }
 
 void printinn(float* matrixA, float* matrixB, float* matrixC,
@@ -2313,144 +2666,144 @@ void printinn(float* matrixA, float* matrixB, float* matrixC,
     return;
 }
 
-void forwardpassCpp(float** weightsArray,float** outputsArray, float* inputArray, int dimensions[], int* activationFunctions, int batchSize, int layers) {
-    std::cout << "In forwardprop \n";
-    float* srcA, * srcB;
-    float* dstMem = inputArray;
-    int mDim, pDim, nDim = batchSize, kernel;
-    for (int x = 0; x < layers; ++x) {
+//void forwardpassCpp(float** weightsArray,float** outputsArray, float* inputArray, int dimensions[], int* activationFunctions, int batchSize, int layers) {
+//    std::cout << "In forwardprop \n";
+//    float* srcA, * srcB;
+//    float* dstMem = inputArray;
+//    int mDim, pDim, nDim = batchSize, kernel;
+//    for (int x = 0; x < layers; ++x) {
+//
+//        mDim = dimensions[x + 1];
+//        pDim = dimensions[x];
+//
+//        srcA = weightsArray[x];
+//        srcB = dstMem;
+//        dstMem = outputsArray[x];
+//
+//        kernel = activationFunctions[x];
+//        //printinn(srcA, srcB, dstMem, mDim, pDim, nDim);
+//        switch (kernel) {
+//        case 0:
+//            multiplyIdKernelCpp(srcA, srcB, dstMem, mDim, pDim, nDim);
+//            break;
+//        case 1:
+//            multiplySigmoidKernelCpp(srcA, srcB, dstMem, mDim, pDim, nDim);
+//            break;
+//        case 2:
+//            multiplyTanhKernelCpp(srcA, srcB, dstMem, mDim, pDim, nDim);
+//            break;
+//        case 3:
+//            multiplyReLUKernelCpp(srcA, srcB, dstMem, mDim, pDim, nDim);
+//            break;
+//        }
+//        //system("pause");
+//    }
+//}
 
-        mDim = dimensions[x + 1];
-        pDim = dimensions[x];
-
-        srcA = weightsArray[x];
-        srcB = dstMem;
-        dstMem = outputsArray[x];
-
-        kernel = activationFunctions[x];
-        //printinn(srcA, srcB, dstMem, mDim, pDim, nDim);
-        switch (kernel) {
-        case 0:
-            multiplyIdKernelCpp(srcA, srcB, dstMem, mDim, pDim, nDim);
-            break;
-        case 1:
-            multiplySigmoidKernelCpp(srcA, srcB, dstMem, mDim, pDim, nDim);
-            break;
-        case 2:
-            multiplyTanhKernelCpp(srcA, srcB, dstMem, mDim, pDim, nDim);
-            break;
-        case 3:
-            multiplyReLUKernelCpp(srcA, srcB, dstMem, mDim, pDim, nDim);
-            break;
-        }
-        //system("pause");
-    }
-}
-
-void backpropCpp(float** weightsArray,float** outputsArray,float** deltasArray,float* inputArray, int* dimensions,
-    int* activationFunctions, float* correctOutput, float* costs,int iter,int batchSize,int layers) {
-
-    //std::cout << "In backprop for iter " << iter << " \n";
-
-    int optimizedSizeNetworkOutput = ((sizeof(float) * batchSize - 1) / 64 + 1) * 64;
-    float* resultPtr1 = (float*)_aligned_malloc(optimizedSizeNetworkOutput, 4096);
-    float* networkOutput = (float*)_aligned_malloc(optimizedSizeNetworkOutput, 4096);
-    for (int x = 0; x < batchSize; ++x) {
-
-        networkOutput[x] = outputsArray[layers - 1][x];
-        resultPtr1[x] = outputsArray[layers-1][x] ;
-    }
-
-    costs[iter] = MSECostFunction(correctOutput, resultPtr1, batchSize);
-
-    //Then, let's compute the deltas, starting with the output delta 
-    for (int x = 0; x < batchSize; ++x) {
-        resultPtr1[x] = resultPtr1[x] - correctOutput[x];
-    }
-
-    if (activationFunctions[layers - 1] == 0) {
-        for (int x = 0; x < batchSize; ++x) {
-            networkOutput[x] = 1.0;
-        }
-    }
-    else if (activationFunctions[layers - 1] == 1) {
-        for (int x = 0; x < batchSize; ++x) {
-            networkOutput[x] = networkOutput[x] * (1.0 - networkOutput[x]);
-        }
-    }
-    else if (activationFunctions[layers - 1] == 2) {
-        for (int x = 0; x < batchSize; ++x) {
-            networkOutput[x] = 1.0f - (networkOutput[x]) * (networkOutput[x]);
-        }
-    }
-    else if (activationFunctions[layers - 1] == 3) {
-        for (int x = 0; x < batchSize; ++x) {
-            if (networkOutput[x] == 0.0)
-                networkOutput[x] = 0.0;
-            else
-                networkOutput[x] = 1.0;
-        }
-    }
-
-    for (int x = 0; x < batchSize; ++x) {
-        resultPtr1[x] = resultPtr1[x] * networkOutput[x];
-    }
-    for (int i = 0; i < batchSize; i++) {
-        deltasArray[layers-1][i] = resultPtr1[i];
-    }
-    _aligned_free(resultPtr1);
-    _aligned_free(networkOutput);
-
-    //non-output deltas calculation loop
-    float* srcA, * srcB, * dstMem;
-    dstMem = deltasArray[layers - 1];
-    float* outputs;
-    int mDim, pDim, nDim = batchSize, kernel;;
-    for (int x = layers - 1; x > 0; --x) {
-
-        mDim = dimensions[x];
-        pDim = dimensions[x + 1];
-        srcA = weightsArray[x];
-        srcB = dstMem;
-        dstMem = deltasArray[x - 1];
-        outputs = outputsArray[x - 1];
-
-        kernel = activationFunctions[x];
-        switch (kernel) {
-        case 0:
-            multiplyIdKernelCpp(srcA, srcB, dstMem, mDim, pDim, nDim);
-            break;
-        case 1:
-            multiplySigmoidKernelCpp(srcA, srcB, dstMem, mDim, pDim, nDim);
-            break;
-        case 2:
-            multiplyTanhKernelCpp(srcA, srcB, dstMem, mDim, pDim, nDim);
-            break;
-        case 3:
-            multiplyReLUKernelCpp(srcA, srcB, dstMem, mDim, pDim, nDim);
-            break;
-        }
-    }
-
-    //perform weight updates now. We can potentially parallelize this fully even across all network layers
-    //but for now it's only across the weights of each layer and then sequentially across layers
-    float learning_rate = 0.06;
-    pDim = batchSize;
-    for (int x = layers - 1; x >= 0; --x) {
-        //std::cout << "I'm in iteration " << x << " of the weight update loop \n";
-        mDim = dimensions[x + 1];
-        nDim = dimensions[x];
-        srcA = deltasArray[x];
-        dstMem = weightsArray[x];
-        if (x != 0) {
-            srcB = outputsArray[x - 1];
-        }
-        else {
-            srcB = inputArray;
-        }
-        updateWeights(srcA, srcB, dstMem, mDim, pDim, nDim, learning_rate);
-    }
-}
+//void backpropCpp(float** weightsArray,float** outputsArray,float** deltasArray,float* inputArray, int* dimensions,
+//    int* activationFunctions, float* correctOutput, float* costs,int iter,int batchSize,int layers) {
+//
+//    //std::cout << "In backprop for iter " << iter << " \n";
+//
+//    int optimizedSizeNetworkOutput = ((sizeof(float) * batchSize - 1) / 64 + 1) * 64;
+//    float* resultPtr1 = (float*)_aligned_malloc(optimizedSizeNetworkOutput, 4096);
+//    float* networkOutput = (float*)_aligned_malloc(optimizedSizeNetworkOutput, 4096);
+//    for (int x = 0; x < batchSize; ++x) {
+//
+//        networkOutput[x] = outputsArray[layers - 1][x];
+//        resultPtr1[x] = outputsArray[layers-1][x] ;
+//    }
+//
+//    costs[iter] = MSECostFunction(correctOutput, resultPtr1, batchSize);
+//
+//    //Then, let's compute the deltas, starting with the output delta 
+//    for (int x = 0; x < batchSize; ++x) {
+//        resultPtr1[x] = resultPtr1[x] - correctOutput[x];
+//    }
+//
+//    if (activationFunctions[layers - 1] == 0) {
+//        for (int x = 0; x < batchSize; ++x) {
+//            networkOutput[x] = 1.0;
+//        }
+//    }
+//    else if (activationFunctions[layers - 1] == 1) {
+//        for (int x = 0; x < batchSize; ++x) {
+//            networkOutput[x] = networkOutput[x] * (1.0 - networkOutput[x]);
+//        }
+//    }
+//    else if (activationFunctions[layers - 1] == 2) {
+//        for (int x = 0; x < batchSize; ++x) {
+//            networkOutput[x] = 1.0f - (networkOutput[x]) * (networkOutput[x]);
+//        }
+//    }
+//    else if (activationFunctions[layers - 1] == 3) {
+//        for (int x = 0; x < batchSize; ++x) {
+//            if (networkOutput[x] == 0.0)
+//                networkOutput[x] = 0.0;
+//            else
+//                networkOutput[x] = 1.0;
+//        }
+//    }
+//
+//    for (int x = 0; x < batchSize; ++x) {
+//        resultPtr1[x] = resultPtr1[x] * networkOutput[x];
+//    }
+//    for (int i = 0; i < batchSize; i++) {
+//        deltasArray[layers-1][i] = resultPtr1[i];
+//    }
+//    _aligned_free(resultPtr1);
+//    _aligned_free(networkOutput);
+//
+//    //non-output deltas calculation loop
+//    float* srcA, * srcB, * dstMem;
+//    dstMem = deltasArray[layers - 1];
+//    float* outputs;
+//    int mDim, pDim, nDim = batchSize, kernel;;
+//    for (int x = layers - 1; x > 0; --x) {
+//
+//        mDim = dimensions[x];
+//        pDim = dimensions[x + 1];
+//        srcA = weightsArray[x];
+//        srcB = dstMem;
+//        dstMem = deltasArray[x - 1];
+//        outputs = outputsArray[x - 1];
+//
+//        kernel = activationFunctions[x];
+//        switch (kernel) {
+//        case 0:
+//            multiplyIdKernelCpp(srcA, srcB, dstMem, mDim, pDim, nDim);
+//            break;
+//        case 1:
+//            multiplySigmoidKernelCpp(srcA, srcB, dstMem, mDim, pDim, nDim);
+//            break;
+//        case 2:
+//            multiplyTanhKernelCpp(srcA, srcB, dstMem, mDim, pDim, nDim);
+//            break;
+//        case 3:
+//            multiplyReLUKernelCpp(srcA, srcB, dstMem, mDim, pDim, nDim);
+//            break;
+//        }
+//    }
+//
+//    //perform weight updates now. We can potentially parallelize this fully even across all network layers
+//    //but for now it's only across the weights of each layer and then sequentially across layers
+//    float learning_rate = 0.06;
+//    pDim = batchSize;
+//    for (int x = layers - 1; x >= 0; --x) {
+//        //std::cout << "I'm in iteration " << x << " of the weight update loop \n";
+//        mDim = dimensions[x + 1];
+//        nDim = dimensions[x];
+//        srcA = deltasArray[x];
+//        dstMem = weightsArray[x];
+//        if (x != 0) {
+//            srcB = outputsArray[x - 1];
+//        }
+//        else {
+//            srcB = inputArray;
+//        }
+//        updateWeights(srcA, srcB, dstMem, mDim, pDim, nDim, learning_rate);
+//    }
+//}
 
 
 void printWeights(ocl_args_d_t* ocl, cl_mem* buffersWeightsArray, int layers, int dimensions[], int batchSize) {
@@ -2598,31 +2951,6 @@ cl_uint minibatchGD(ocl_args_d_t* ocl, int dimensions[], int* activationFunction
             return err;
         }
     }
-
-    ////dealing with remainder data values
-    //std::cout << "in remainder" << '\n';
-    //int remainder = numTrainImages - batchSize * ((numTrainImages-1) / batchSize);
-    //std::cout << "There's a remainder of " << remainder << " data items" << '\n';
-    //optimizedSizeIn = ((sizeof(cl_float) * dimensions[0] * remainder - 1) / 64 + 1) * 64;
-    //optimizedSizeOut = ((sizeof(cl_float) * remainder - 1) / 64 + 1) * 64;
-    //for (int i = 0; i < remainder; ++i) {
-    //    for (int j = 0; j < dimensions[0]; ++j) {
-    //        inArray[j * remainder + i] = (cl_float)dataset[i + batchSize * (itersPerEpoch - 1)][j];
-    //    }
-    //    correctOutput[i] = labels[i + batchSize * (itersPerEpoch - 1) ];
-    //}
-    //inputBuffer[itersPerEpoch - 1] = clCreateBuffer(ocl->context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, optimizedSizeIn, inArray, &err);
-    //if (CL_SUCCESS != err)
-    //{
-    //    LogError("Error: creating input buffer returned %s\n", TranslateOpenCLError(err));
-    //    return err;
-    //}
-    //groundTruthBuffer[itersPerEpoch - 1] = clCreateBuffer(ocl->context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, optimizedSizeOut, correctOutput, &err);
-    //if (CL_SUCCESS != err)
-    //{
-    //    LogError("Error: creating input buffer returned %s\n", TranslateOpenCLError(err));
-    //    return err;
-    //}
 
     if (NULL == weightBuffers || NULL == biasBuffers||NULL == outputBuffers || NULL == deltaBuffers || NULL == inputBuffer || NULL == correctOutput)
     {
@@ -3138,18 +3466,13 @@ int _tmain(int argc, TCHAR* argv[])
     cl_kernel activationFunctionKernels[numAF], activationFunctionDeltaKernels[numAF];
     cl_kernel activationFunctionKernelsSimple[numAF], activationFunctionDeltaKernelsSimple[numAF];
 
-    //for (int x = 0; x < batchSize; ++x) {
-    //    std::cout << "Correct output term "<<x<<" is"<< correctOutput[x] << '\n';
-    //}
     int activationFunctions[layers] = {3,3,0}; // 0 for identity, 1 for tanh, 2 for sigmoid, 3 for ReLU
 
-    //initialize Open CL objects (context, queue, etc.)
     if (CL_SUCCESS != SetupOpenCL(&ocl, deviceType))
     {
         return -1;
     }
 
-    // Create and build the OpenCL program
     if (CL_SUCCESS != CreateAndBuildProgram(&ocl))
     {
         return -1;
@@ -3197,13 +3520,14 @@ int _tmain(int argc, TCHAR* argv[])
     int epochs = 10;
     int classes = 10;
 
-    
+    //minibatchGDCpp(dimAr, activationFunctions, batchSize, layers, classes, epochs, trainingDataset, trainingLabels,
+    //    numTrainImages, valDataset, valLabels, numValImages);
 
     //MAIN LOOP
     //{
     //    int TS = 16;
     //    mDim = 1024, pDim = 784, nDim = 512;
-    //    int WPT = 8;
+    //    int WPT = 16;
     //    const size_t global[2] = { mDim, nDim/WPT };
     //    const size_t local[2] = { TS, TS/WPT};
     //    kernelCorrectnessTesting(&ocl, activationFunctionKernelNames, activationFunctionDeltaKernelNames, activationFunctionKernels,
@@ -3212,24 +3536,12 @@ int _tmain(int argc, TCHAR* argv[])
     //}
     //system("pause");
 
-    //int optimizedSize = ((sizeof(float) * 1024 - 1) / 64 + 1) * 64;
-    //float* ar1 = (float*)_aligned_malloc(optimizedSize, 4096);
-    //float* ar2 = (float*)_aligned_malloc(optimizedSize, 4096);
-    //auto start = high_resolution_clock::now();
-    //for (int i = 0; i < 1024; ++i) {
-    //    ar1[i] -= 0.01* ar2[i];
-    //}
-    //auto elapsed = std::chrono::high_resolution_clock::now() - start;
-    //long long microseconds = std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count();
-    //std::cout << microseconds << " microseconds for simple vector addition \n";
-    //system("pause");
-
     //{
-    //    int TW = 1;
+    //    int TW = 8;
     //    int WGS = 16; //set to 0 to disable manual local size setting
     //    int iterations = 50;
     //    int typeOfKernel = 1; //1 through 3
-    //    kernelLatencyTesting(&ocl, &activationFunctionDeltaKernels[0], iterations, WGS, TW, typeOfKernel);
+    //    kernelLatencyTesting(&ocl, &activationFunctionKernels[0], iterations, WGS, TW, typeOfKernel);
     //}
 
 

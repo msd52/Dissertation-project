@@ -98,9 +98,12 @@ const int mDim, const int pDim, const int nDim, global float* biases)
     const int c = get_global_id(1);
     float finalValue = 0.0;
 
+    __attribute__((opencl_unroll_hint(16)))
     for (int p = 0 ; p < pDim ; p++){
+        //prefetch(&(matrixB[nDim*(p+4)+c]), 1);
         finalValue+=matrixA[pDim*r+p]*matrixB[nDim*p+c];
     }
+    //prefetch(&(biases[r]),1);
     matrixC[r*nDim+c] = finalValue+biases[r];
     #if DEBUG_FORWARD == true
         if (r==0 && c==0){

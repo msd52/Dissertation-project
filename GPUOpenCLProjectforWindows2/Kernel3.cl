@@ -1,8 +1,8 @@
 // TODO: Add OpenCL kernel code here.
 
 #define TS 16
-#define WPT 8
-#define RTS 2
+#define WPT 4
+#define RTS 4
 #define WPTM 4
 #define WPTN 4
 #define UNROLLFACTOR 8
@@ -19,22 +19,32 @@ const int mDim, const int pDim, const int nDim, global float* biases)
     // Local memory to fit a tile of TS*TS elements of A and B
     __local float Asub[TS][TS];
     __local float Bsub[TS][TS];
- 
+    //__local float Biassub[TS];
+
     // Initialise the accumulation registers
     float acc[WPT];
-    __attribute__((opencl_unroll_hint(UNROLLFACTOR)))
     for (int w=0; w<WPT; w++) {
         acc[w] = 0.0f;
     }
     
     // Loop over all tiles
     const int numTiles = pDim/TS;
+
+    /*if (col==0){
+        Biassub[row] = biases[globalCol];
+    }*/
+
     for (int t=0; t<numTiles; t++) {
  
         // Load one tile of A and B into local memory
         const int tiledRow = TS*t + row;
         const int tiledCol = TS*t + col;
-        __attribute__((opencl_unroll_hint(UNROLLFACTOR)))
+        /*for (int w=0; w<WPT; w++) {
+            //prefetch(&(matrixA[globalRow*pDim+(tiledCol + w+1)]), 1);
+            //prefetch(&(matrixB[(globalCol + w+1) + tiledRow*nDim]), 1);
+            Asub[row][col+w] = matrixA[globalRow*pDim+(tiledCol + w)];
+            Bsub[row][col+w] = matrixB[(globalCol + w) + tiledRow*nDim];
+        }*/
         for (int w=0; w<WPT; w++) {
             Asub[row][col+w*RTS] = matrixA[globalRow*pDim+(tiledCol + w*RTS)];
             Bsub[row][col+w*RTS] = matrixB[(globalCol + w*RTS) + tiledRow*nDim];
@@ -45,7 +55,9 @@ const int mDim, const int pDim, const int nDim, global float* biases)
  
         // Perform the computation for a single tile
         for (int k=0; k<TS; k++) {
-            __attribute__((opencl_unroll_hint(UNROLLFACTOR)))
+            /*for (int w=0; w<WPT; ++w) {
+                acc[w] += Asub[row][k] * Bsub[k][col + w];
+            }*/
             for (int w=0; w<WPT; ++w) {
                 acc[w] += Asub[row][k] * Bsub[k][col + w*RTS];
             }
@@ -56,7 +68,6 @@ const int mDim, const int pDim, const int nDim, global float* biases)
     }
  
     // Store the final results in C
-    __attribute__((opencl_unroll_hint(UNROLLFACTOR)))
     for (int w=0; w<WPT; ++w) {
         matrixC[(globalCol + w*RTS) + globalRow*nDim] = acc[w]+biases[globalRow];
     }
