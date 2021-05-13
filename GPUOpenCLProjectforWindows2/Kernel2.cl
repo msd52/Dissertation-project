@@ -1,7 +1,7 @@
-//File containing implementation with basic cache blocking using local memory
+//File containing implementation with basic blocked matrix multiplication using local memory
 
 //debug macros allow monitoring the values to detect underflow or overflow
-#define TS 16
+#define WGS 16
 #define DEBUG_FORWARD false
 #define DEBUG_DELTAS false
 #define DEBUG_UPDATE false
@@ -10,43 +10,33 @@ __kernel void Multiply_Buffer_Identity(global float* matrixA, global float* matr
 const int mDim, const int pDim, const int nDim, global float* biases)
 {
    
-    // Thread identifiers
-    const int row = get_local_id(0); // Local row ID (max: TS)
-    const int col = get_local_id(1); // Local col ID (max: TS)
-    const int globalRow = TS*get_group_id(0) + row; // Row ID of C (0..M)
-    const int globalCol = TS*get_group_id(1) + col; // Col ID of C (0..N)
+    const int row = get_local_id(0);
+    const int col = get_local_id(1);
+    const int globalRow = get_global_id(0);
+    const int globalCol = get_global_id(1);
 
-    // Local memory to fit a tile of TS*TS elements of A and B
-    __local float Asub[TS][TS];
-    __local float Bsub[TS][TS];
+    float temp = 0.0f;
+
+    local float Asub[4*WGS][2*WGS];
+    local float Bsub[4*WGS][2*WGS];
+     
+    const int blocks= pDim/WGS;
+    for (int t=0; t<blocks; t++) {
  
-    // Initialise the accumulation register
-    float acc = 0.0f;
-    
-    // Loop over all tiles
-    const int numTiles = pDim/TS;
-    for (int t=0; t<numTiles; t++) {
- 
-        // Load one tile of A and B into local memory
-        const int tiledRow = TS*t + row;
-        const int tiledCol = TS*t + col;
-        Asub[row][col] = matrixA[tiledCol + globalRow*pDim];
-        Bsub[row][col] = matrixB[globalCol+ tiledRow*nDim];
- 
-        // Synchronise to make sure the tile is loaded
+        const int tempRow = WGS*t + row;
+        const int tempCol = WGS*t + col;
+        Asub[row][col] = matrixA[tempCol + globalRow*pDim];
+        Bsub[row][col] = matrixB[globalCol+ tempRow*nDim];
         barrier(CLK_LOCAL_MEM_FENCE);
  
-        // Perform the computation for a single tile
-        for (int k=0; k<TS; k++) {
-            acc += Asub[row][k] * Bsub[k][col];
+        for (int k=0; k<WGS; k++) {
+            temp += Asub[row][k] * Bsub[k][col];
         }
  
-        // Synchronise before loading the next tile
         barrier(CLK_LOCAL_MEM_FENCE);
     }
  
-    // Store the final result in C
-    matrixC[globalCol + globalRow*nDim] = acc+biases[globalRow];
+    matrixC[globalCol + globalRow*nDim] = temp+biases[globalRow];
     #if DEBUG_FORWARD == true
         printf("Identity forward is %d %d, is %f \n", globalRow, globalCol, matrixC[globalCol + globalRow*nDim]);
     #endif
@@ -58,43 +48,34 @@ const int mDim, const int pDim, const int nDim, global float* biases)
 __kernel void Multiply_Buffer_Sigmoid(global float* matrixA, global float* matrixB, global float* matrixC,
 const int mDim, const int pDim, const int nDim, global float* biases)
 {
-    // Thread identifiers
-    const int row = get_local_id(0); // Local row ID (max: TS)
-    const int col = get_local_id(1); // Local col ID (max: TS)
-    const int globalRow = TS*get_group_id(0) + row; // Row ID of C (0..M)
-    const int globalCol = TS*get_group_id(1) + col; // Col ID of C (0..N)
+    const int row = get_local_id(0);
+    const int col = get_local_id(1);
+    const int globalRow = get_global_id(0);
+    const int globalCol = get_global_id(1);
  
-    // Local memory to fit a tile of TS*TS elements of A and B
-    __local float Asub[TS][TS];
-    __local float Bsub[TS][TS];
+    local float Asub[WGS][WGS];
+    local float Bsub[WGS][WGS];
  
-    // Initialise the accumulation register
-    float acc = 0.0f;
+    float temp = 0.0f;
     
-    // Loop over all tiles
-    const int numTiles = pDim/TS;
-    for (int t=0; t<numTiles; t++) {
+    const int blocks = pDim/WGS;
+    for (int t=0; t<blocks; t++) {
  
-        // Load one tile of A and B into local memory
-        const int tiledRow = TS*t + row;
-        const int tiledCol = TS*t + col;
-        Asub[row][col] = matrixA[tiledCol + globalRow*pDim];
-        Bsub[row][col] = matrixB[globalCol+ tiledRow*nDim];
+        const int tempRow = WGS*t + row;
+        const int tempCol = WGS*t + col;
+        Asub[row][col] = matrixA[tempCol + globalRow*pDim];
+        Bsub[row][col] = matrixB[globalCol+ tempRow*nDim];
  
-        // Synchronise to make sure the tile is loaded
         barrier(CLK_LOCAL_MEM_FENCE);
  
-        // Perform the computation for a single tile
-        for (int k=0; k<TS; k++) {
-            acc += Asub[row][k] * Bsub[k][col];
+        for (int k=0; k<WGS; k++) {
+            temp += Asub[row][k] * Bsub[k][col];
         }
  
-        // Synchronise before loading the next tile
         barrier(CLK_LOCAL_MEM_FENCE);
     }
  
-    // Store the final result in C
-    matrixC[globalCol + globalRow*nDim] = 1.0 / (1.0 + exp(-acc-biases[globalRow]));
+    matrixC[globalCol + globalRow*nDim] = 1.0 / (1.0 + exp(-temp-biases[globalRow]));
     #if DEBUG_FORWARD == true
         printf("Sigmoid forward is %d %d, is %f \n", globalRow, globalCol, matrixC[globalCol + globalRow*nDim]);
     #endif
@@ -103,43 +84,34 @@ const int mDim, const int pDim, const int nDim, global float* biases)
 __kernel void Multiply_Buffer_Tanh(global float* matrixA, global float* matrixB, global float* matrixC,
 const int mDim, const int pDim, const int nDim, global float* biases)
 {
-    // Thread identifiers
-    const int row = get_local_id(0); // Local row ID (max: TS)
-    const int col = get_local_id(1); // Local col ID (max: TS)
-    const int globalRow = TS*get_group_id(0) + row; // Row ID of C (0..M)
-    const int globalCol = TS*get_group_id(1) + col; // Col ID of C (0..N)
+    const int row = get_local_id(0);
+    const int col = get_local_id(1);
+    const int globalRow = get_global_id(0);
+    const int globalCol = get_global_id(1);
  
-    // Local memory to fit a tile of TS*TS elements of A and B
-    __local float Asub[TS][TS];
-    __local float Bsub[TS][TS];
+    float temp = 0.0f;
+
+    __local float Asub[WGS][WGS];
+    __local float Bsub[WGS][WGS];
+     
+    const int blocks = pDim/WGS;
+    for (int t=0; t<blocks; t++) {
  
-    // Initialise the accumulation register
-    float acc = 0.0f;
-    
-    // Loop over all tiles
-    const int numTiles = pDim/TS;
-    for (int t=0; t<numTiles; t++) {
+        const int tempRow = WGS*t + row;
+        const int tempCol = WGS*t + col;
+        Asub[row][col] = matrixA[tempCol + globalRow*pDim];
+        Bsub[row][col] = matrixB[globalCol+ tempRow*nDim];
  
-        // Load one tile of A and B into local memory
-        const int tiledRow = TS*t + row;
-        const int tiledCol = TS*t + col;
-        Asub[row][col] = matrixA[tiledCol + globalRow*pDim];
-        Bsub[row][col] = matrixB[globalCol+ tiledRow*nDim];
- 
-        // Synchronise to make sure the tile is loaded
         barrier(CLK_LOCAL_MEM_FENCE);
  
-        // Perform the computation for a single tile
-        for (int k=0; k<TS; k++) {
-            acc += Asub[row][k] * Bsub[k][col];
+        for (int k=0; k<WGS; k++) {
+            temp += Asub[row][k] * Bsub[k][col];
         }
  
-        // Synchronise before loading the next tile
         barrier(CLK_LOCAL_MEM_FENCE);
     }
  
-    // Store the final result in C
-    matrixC[globalCol + globalRow*nDim] = tanh(acc+biases[globalRow]);
+    matrixC[globalCol + globalRow*nDim] = tanh(temp+biases[globalRow]);
     #if DEBUG_FORWARD == true
         printf("Tanh forward is %d %d, is %f \n", globalRow, globalCol, matrixC[globalCol + globalRow*nDim]);
     #endif
@@ -148,44 +120,34 @@ const int mDim, const int pDim, const int nDim, global float* biases)
 __kernel void Multiply_Buffer_ReLU(global float* matrixA, global float* matrixB, global float* matrixC,
 const int mDim, const int pDim, const int nDim, global float* biases)
 {
-    // Thread identifiers
-    const int row = get_local_id(0); // Local row ID (max: TS)
-    const int col = get_local_id(1); // Local col ID (max: TS)
-    const int globalRow = TS*get_group_id(0) + row; // Row ID of C (0..M)
-    const int globalCol = TS*get_group_id(1) + col; // Col ID of C (0..N)
+    const int row = get_local_id(0);
+    const int col = get_local_id(1);
+    const int globalRow = get_global_id(0);
+    const int globalCol = get_global_id(1);
 
-    // Local memory to fit a tile of TS*TS elements of A and B
-    __local float Asub[TS][TS];
-    __local float Bsub[TS][TS];
+    float temp = 0.0f;
+
+    __local float Asub[WGS][WGS];
+    __local float Bsub[WGS][WGS];
+     
+    const int blocks = pDim/WGS;
+    for (int t=0; t<blocks; t++) {
  
-    // Initialise the accumulation register
-    float acc = 0.0f;
-    
-    // Loop over all tiles
-    const int numTiles = pDim/TS;
-    for (int t=0; t<numTiles; t++) {
+        const int tempRow = WGS*t + row;
+        const int tempCol = WGS*t + col;
+        Asub[row][col] = matrixA[tempCol + globalRow*pDim];
+        Bsub[row][col] = matrixB[globalCol+ tempRow*nDim];
  
-        // Load one tile of A and B into local memory
-        const int tiledRow = TS*t + row;
-        const int tiledCol = TS*t + col;
-        Asub[row][col] = matrixA[tiledCol + globalRow*pDim];
-        Bsub[row][col] = matrixB[globalCol+ tiledRow*nDim];
- 
-        // Synchronise to make sure the tile is loaded
         barrier(CLK_LOCAL_MEM_FENCE);
  
-        // Perform the computation for a single tile
-        for (int k=0; k<TS; k++) {
-            //printf("%f and %f for %d and %d \n", Asub[row][k] , Bsub[k][col], globalRow, globalCol);
-            acc += Asub[row][k] * Bsub[k][col];
+        for (int k=0; k<WGS; k++) {
+            temp += Asub[row][k] * Bsub[k][col];
         }
  
-        // Synchronise before loading the next tile
         barrier(CLK_LOCAL_MEM_FENCE);
     }
  
-    // Store the final result in C
-    matrixC[globalCol + globalRow*nDim] = fmax(acc+biases[globalRow],0);
+    matrixC[globalCol + globalRow*nDim] = fmax(temp+biases[globalRow],0);
     #if DEBUG_FORWARD == true
         printf("ReLU forward is %d %d, is %f \n", globalRow, globalCol, matrixC[globalCol + globalRow*nDim]);
     #endif
@@ -194,45 +156,35 @@ const int mDim, const int pDim, const int nDim, global float* biases)
 __kernel void Multiply_Deltas_Buffers_Identity(global float* matrixA, global float* matrixB, global float* matrixC,
 const int mDim, const int pDim, const int nDim, global float* matrixD)
 {
-    // Thread identifiers
-    const int row = get_local_id(0); // Local row ID (max: TS)
-    const int col = get_local_id(1); // Local col ID (max: TS)
-    const int globalRow = TS*get_group_id(0) + row; // Row ID of C (0..M)
-    const int globalCol = TS*get_group_id(1) + col; // Col ID of C (0..N)
+    const int row = get_local_id(0);
+    const int col = get_local_id(1);
+    const int globalRow = get_global_id(0);
+    const int globalCol = get_global_id(1);
 
-    // Local memory to fit a tile of TS*TS elements of A and B
-    __local float Asub[TS][TS];
-    __local float Bsub[TS][TS];
- 
-    // Initialise the accumulation register
-    float acc = 0.0f;
-    
-    // Loop over all tiles
-    const int numTiles = pDim/TS;
-    for (int t=0; t<numTiles; t++) {
- 
-        // Load one tile of A and B into local memory
-        const int tiledRow = TS*t + row;
-        const int tiledCol = TS*t + col;
+    float temp = 0.0f;
 
-        Asub[row][col] = matrixA[tiledCol*mDim + globalRow];
-        Bsub[row][col] = matrixB[globalCol+ tiledRow*nDim];
+    __local float Asub[WGS][WGS];
+    __local float Bsub[WGS][WGS];
+     
+    const int blocks = pDim/WGS;
+    for (int t=0; t<blocks; t++) {
  
-        // Synchronise to make sure the tile is loaded
+        const int tempRow = WGS*t + row;
+        const int tempCol = WGS*t + col;
+
+        Asub[row][col] = matrixA[tempCol*mDim + globalRow];
+        Bsub[row][col] = matrixB[globalCol+ tempRow*nDim];
+ 
         barrier(CLK_LOCAL_MEM_FENCE);
  
-        // Perform the computation for a single tile
-        for (int k=0; k<TS; k++) {
-            //printf("%f and %f for %d and %d \n", Asub[row][k] , Bsub[k][col], globalRow, globalCol);
-            acc += Asub[row][k] * Bsub[k][col];
+        for (int k=0; k<WGS; k++) {
+            temp += Asub[row][k] * Bsub[k][col];
         }
  
-        // Synchronise before loading the next tile
         barrier(CLK_LOCAL_MEM_FENCE);
     }
  
-    // Store the final result in C
-    matrixC[globalCol + globalRow*nDim] = clamp((float)acc,-0.005f,0.005f);
+    matrixC[globalCol + globalRow*nDim] = clamp((float)temp,-0.005f,0.005f);
     #if DEBUG_DELTAS == true
         printf("Identity deltas is %d %d, is %f \n", globalRow, globalCol, matrixC[globalCol + globalRow*nDim]);
     #endif
@@ -242,45 +194,35 @@ const int mDim, const int pDim, const int nDim, global float* matrixD)
 __kernel void Multiply_Deltas_Buffers_Sigmoid(global float* matrixA, global float* matrixB, global float* matrixC,
 const int mDim, const int pDim, const int nDim, global float* matrixD)
 {
-    // Thread identifiers
-    const int row = get_local_id(0); // Local row ID (max: TS)
-    const int col = get_local_id(1); // Local col ID (max: TS)
-    const int globalRow = TS*get_group_id(0) + row; // Row ID of C (0..M)
-    const int globalCol = TS*get_group_id(1) + col; // Col ID of C (0..N)
+    const int row = get_local_id(0);
+    const int col = get_local_id(1);
+    const int globalRow = get_global_id(0);
+    const int globalCol = get_global_id(1);
 
-    // Local memory to fit a tile of TS*TS elements of A and B
-    __local float Asub[TS][TS];
-    __local float Bsub[TS][TS];
+    __local float Asub[WGS][WGS];
+    __local float Bsub[WGS][WGS];
  
-    // Initialise the accumulation register
-    float acc = 0.0f;
+    float temp = 0.0f;
     
-    // Loop over all tiles
-    const int numTiles = pDim/TS;
-    for (int t=0; t<numTiles; t++) {
+    const int blocks = pDim/WGS;
+    for (int t=0; t<blocks; t++) {
  
-        // Load one tile of A and B into local memory
-        const int tiledRow = TS*t + row;
-        const int tiledCol = TS*t + col;
+        const int tempRow = WGS*t + row;
+        const int tempCol = WGS*t + col;
 
-        Asub[row][col] = matrixA[tiledCol*mDim + globalRow];
-        Bsub[row][col] = matrixB[globalCol+ tiledRow*nDim];
+        Asub[row][col] = matrixA[tempCol*mDim + globalRow];
+        Bsub[row][col] = matrixB[globalCol+ tempRow*nDim];
  
-        // Synchronise to make sure the tile is loaded
         barrier(CLK_LOCAL_MEM_FENCE);
  
-        // Perform the computation for a single tile
-        for (int k=0; k<TS; k++) {
-            //printf("%f and %f for %d and %d \n", Asub[row][k] , Bsub[k][col], globalRow, globalCol);
-            acc += Asub[row][k] * Bsub[k][col];
+        for (int k=0; k<WGS; k++) {
+            temp += Asub[row][k] * Bsub[k][col];
         }
  
-        // Synchronise before loading the next tile
         barrier(CLK_LOCAL_MEM_FENCE);
     }
  
-    // Store the final result in C
-    matrixC[globalCol + globalRow*nDim] = clamp((float)(acc*matrixD[globalCol + globalRow*nDim] * (1.0f - matrixD[globalCol + globalRow*nDim])),-0.005f,0.005f);
+    matrixC[globalCol + globalRow*nDim] = clamp((float)(temp*matrixD[globalCol + globalRow*nDim] * (1.0f - matrixD[globalCol + globalRow*nDim])),-0.005f,0.005f);
     #if DEBUG_DELTAS == true
         printf("Sigmoid deltas is %d %d, is %f \n", globalRow, globalCol, matrixC[globalCol + globalRow*nDim]);
     #endif
@@ -289,43 +231,34 @@ const int mDim, const int pDim, const int nDim, global float* matrixD)
 __kernel void Multiply_Deltas_Buffers_Tanh(global float* matrixA, global float* matrixB, global float* matrixC,
 const int mDim, const int pDim, const int nDim, global float* matrixD)
 {
-    // Thread identifiers
-    const int row = get_local_id(0); // Local row ID (max: TS)
-    const int col = get_local_id(1); // Local col ID (max: TS)
-    const int globalRow = TS*get_group_id(0) + row; // Row ID of C (0..M)
-    const int globalCol = TS*get_group_id(1) + col; // Col ID of C (0..N)
+    const int row = get_local_id(0);
+    const int col = get_local_id(1);
+    const int globalRow = get_global_id(0);
+    const int globalCol = get_global_id(1);
  
-    // Local memory to fit a tile of TS*TS elements of A and B
-    __local float Asub[TS][TS];
-    __local float Bsub[TS][TS];
+    __local float Asub[WGS][WGS];
+    __local float Bsub[WGS][WGS];
  
-    // Initialise the accumulation register
-    float acc = 0.0f;
+    float temp = 0.0f;
     
-    // Loop over all tiles
-    const int numTiles = pDim/TS;
-    for (int t=0; t<numTiles; t++) {
+    const int blocks = pDim/WGS;
+    for (int t=0; t<blocks; t++) {
  
-        // Load one tile of A and B into local memory
-        const int tiledRow = TS*t + row;
-        const int tiledCol = TS*t + col;
-        Asub[row][col] = matrixA[tiledCol*mDim + globalRow];
-        Bsub[row][col] = matrixB[globalCol+ tiledRow*nDim];
+        const int tempRow = WGS*t + row;
+        const int tempCol = WGS*t + col;
+        Asub[row][col] = matrixA[tempCol*mDim + globalRow];
+        Bsub[row][col] = matrixB[globalCol+ tempRow*nDim];
  
-        // Synchronise to make sure the tile is loaded
         barrier(CLK_LOCAL_MEM_FENCE);
  
-        // Perform the computation for a single tile
-        for (int k=0; k<TS; k++) {
-            acc += Asub[row][k] * Bsub[k][col];
+        for (int k=0; k<WGS; k++) {
+            temp += Asub[row][k] * Bsub[k][col];
         }
  
-        // Synchronise before loading the next tile
         barrier(CLK_LOCAL_MEM_FENCE);
     }
  
-    // Store the final result in C
-    matrixC[globalCol + globalRow*nDim] = clamp((float)(acc*(1 - pow(matrixD[globalCol + globalRow*nDim],2))),-0.005f,0.005f);
+    matrixC[globalCol + globalRow*nDim] = clamp((float)(temp*(1 - pow(matrixD[globalCol + globalRow*nDim],2))),-0.005f,0.005f);
     #if DEBUG_DELTAS == true
         printf("Tanh deltas is %d %d, is %f \n", globalRow, globalCol, matrixC[globalCol + globalRow*nDim]);
     #endif
@@ -334,47 +267,35 @@ const int mDim, const int pDim, const int nDim, global float* matrixD)
 __kernel void Multiply_Deltas_Buffers_ReLU(global float* matrixA, global float* matrixB, global float* matrixC,
 const int mDim, const int pDim, const int nDim, global float* matrixD)
 {
-    // Thread identifiers
-    const int row = get_local_id(0); // Local row ID (max: TS)
-    const int col = get_local_id(1); // Local col ID (max: TS)
-    const int globalRow = TS*get_group_id(0) + row; // Row ID of C (0..M)
-    const int globalCol = TS*get_group_id(1) + col; // Col ID of C (0..N)
+    const int row = get_local_id(0);
+    const int col = get_local_id(1);
+    const int globalRow = get_global_id(0);
+    const int globalCol = get_global_id(1);
 
+    float temp = 0.0f;
 
-    // Local memory to fit a tile of TS*TS elements of A and B
-    __local float Asub[TS][TS];
-    __local float Bsub[TS][TS];
+    __local float Asub[WGS][WGS];
+    __local float Bsub[WGS][WGS];
  
-    // Initialise the accumulation register
-    float acc = 0.0f;
     
-    // Loop over all tiles
-    const int numTiles = pDim/TS;
-    for (int t=0; t<numTiles; t++) {
+    const int blocks = pDim/WGS;
+    for (int t=0; t<blocks; t++) {
  
-        // Load one tile of A and B into local memory
-        const int tiledRow = TS*t + row;
-        const int tiledCol = TS*t + col;
-        Asub[row][col] = matrixA[tiledCol*mDim + globalRow];
-        Bsub[row][col] = matrixB[globalCol+ tiledRow*nDim];
+        const int tempRow = WGS*t + row;
+        const int tempCol = WGS*t + col;
+        Asub[row][col] = matrixA[tempCol*mDim + globalRow];
+        Bsub[row][col] = matrixB[globalCol+ tempRow*nDim];
  
-        // Synchronise to make sure the tile is loaded
         barrier(CLK_LOCAL_MEM_FENCE);
  
-        // Perform the computation for a single tile
-        for (int k=0; k<TS; k++) {
-            //if (globalRow %100 ==0 && globalCol %100 ==0){
-            //    printf("Ins are %f %f", Asub[row][k] ,Bsub[k][col]);
-            //}
-            acc += Asub[row][k] * Bsub[k][col];
+        for (int k=0; k<WGS; k++) {
+            temp += Asub[row][k] * Bsub[k][col];
         }
  
-        // Synchronise before loading the next tile
         barrier(CLK_LOCAL_MEM_FENCE);
     }
  
-    // Store the final result in C
-    matrixC[globalCol + globalRow*nDim] = clamp((float)(acc*(matrixD[globalCol + globalRow*nDim] > 0.0? 1.0:0.0)),-0.005f,0.005f);
+    matrixC[globalCol + globalRow*nDim] = clamp((float)(temp*(matrixD[globalCol + globalRow*nDim] > 0.0? 1.0:0.0)),-0.005f,0.005f);
     #if DEBUG_DELTAS == true
         printf("ReLU deltas is %d %d, is %f \n", globalRow, globalCol, matrixC[globalCol + globalRow*nDim]);
     #endif
@@ -383,44 +304,36 @@ const int mDim, const int pDim, const int nDim, global float* matrixD)
 __kernel void Update_Weights_Buffers(global float* matrixA, global float* matrixB, global float* matrixC
 ,const int mDim, const int pDim, const int nDim, global float* biases, const float offset)
 {
-    // Thread identifiers
-    const int row = get_local_id(0); // Local row ID (max: TS)
-    const int col = get_local_id(1); // Local col ID (max: TS)
-    const int globalRow = TS*get_group_id(0) + row; // Row ID of C (0..M)
-    const int globalCol = TS*get_group_id(1) + col; // Col ID of C (0..N)
+    const int row = get_local_id(0);
+    const int col = get_local_id(1);
+    const int globalRow = get_global_id(0);
+    const int globalCol = get_global_id(1);
 
-    // Local memory to fit a tile of TS*TS elements of A and B
-    __local float Asub[TS][TS];
-    __local float Bsub[TS][TS];
- 
-    // Initialise the accumulation register
-    float acc = 0.0f;
-    
-    // Loop over all tiles
-    const int numTiles = pDim/TS;
-    for (int t=0; t<numTiles; t++) {
+    float temp = 0.0f;
+
+    __local float Asub[WGS][WGS];
+    __local float Bsub[WGS][WGS];
+     
+    const int blocks = pDim/WGS;
+    for (int t=0; t<blocks; t++) {
         
-        // Load one tile of A and B into local memory
-        const int tiledRow = TS*t + row;
-        const int tiledCol = TS*t + col;
-        Asub[row][col] = matrixA[tiledCol + globalRow*pDim];
-        Bsub[row][col] = matrixB[globalCol*pDim+ tiledRow];
+        const int tempRow = WGS*t + row;
+        const int tempCol = WGS*t + col;
+        Asub[row][col] = matrixA[tempCol + globalRow*pDim];
+        Bsub[row][col] = matrixB[globalCol*pDim+ tempRow];
  
-        // Synchronise to make sure the tile is loaded
         barrier(CLK_LOCAL_MEM_FENCE);
  
-        // Perform the computation for a single tile
-        for (int k=0; k<TS; k++) {
-            acc += Asub[row][k] * Bsub[k][col];
+        for (int k=0; k<WGS; k++) {
+            temp += Asub[row][k] * Bsub[k][col];
         }
-        // Synchronise before loading the next tile
         barrier(CLK_LOCAL_MEM_FENCE);
     }
     #if DEBUG_UPDATE == true
         printf("Update is %d %d, is %f \n", globalRow, globalCol, matrixC[globalCol + globalRow*nDim]);
     #endif
-    // Store the final result in C
-    matrixC[globalCol + globalRow*nDim] = matrixC[globalCol + globalRow*nDim] - offset*acc/(float)pDim;
+
+    matrixC[globalCol + globalRow*nDim] = matrixC[globalCol + globalRow*nDim] - offset*temp/(float)pDim;
     if (globalCol==0){
         float tempBias=0.0f;
         for (int p = 0 ; p < pDim; p++){

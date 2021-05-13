@@ -525,7 +525,6 @@ int GetPlatformAndDeviceVersion (cl_platform_id platformId, ocl_args_d_t *ocl)
         LogError("Error: clGetDeviceInfo() to get CL_DEVICE_VERSION length returned '%s'.\n", TranslateOpenCLError(err));
         return err;
     }
-
     // Now, that we know the device's version string length, we can allocate enough space before read it
     std::vector<char> deviceVersion(stringLength);
 
@@ -537,6 +536,16 @@ int GetPlatformAndDeviceVersion (cl_platform_id platformId, ocl_args_d_t *ocl)
         LogError("Error: clGetDeviceInfo() to get CL_DEVICE_VERSION returned %s.\n", TranslateOpenCLError(err));
         return err;
     }
+
+    //cl_ulong size;
+    //clGetDeviceInfo(ocl->device, CL_DEVICE_LOCAL_MEM_SIZE, sizeof(cl_ulong), &size, 0);
+    //if (CL_SUCCESS != err)
+    //{
+    //    LogError("Error: clGetDeviceInfo() to get CL_DEVICE_VERSION returned %s.\n", TranslateOpenCLError(err));
+    //    return err;
+    //}
+    //std::cout << "TOTAL LOCAL MEMORY IS " << size << '\n';
+    //system("pause");
 
     if (strstr(&deviceVersion[0], "OpenCL 2.0") != NULL)
     {
@@ -615,7 +624,7 @@ void mGenerateMatrices(cl_float* inputArray, cl_uint height, cl_uint width)
         }
     }
 
-    std::cout << std::string(10, '\n');
+    //std::cout << std::string(10, '\n');
 }
 
 /*
@@ -871,8 +880,9 @@ cl_uint mExecuteMultiplyKernelCustom(ocl_args_d_t* ocl, cl_uint mDim, cl_uint nD
 
     // Define global iteration space for clEnqueueNDRangeKernel.
     const int WGS = 16;
-    const size_t global[2] = { mDim, nDim };
-    const size_t local[2] = { WGS, WGS };
+    const int TW = 16;
+    const size_t global[2] = { mDim, nDim/TW};
+    const size_t local[2] = { WGS, WGS/TW};
     // execute kernel
     err = clEnqueueNDRangeKernel(ocl->commandQueue, ocl->kernel, 2, NULL, global, local, 0, NULL, NULL);
     if (CL_SUCCESS != err)
@@ -892,7 +902,7 @@ cl_uint mExecuteMultiplyKernelCustom(ocl_args_d_t* ocl, cl_uint mDim, cl_uint nD
     return CL_SUCCESS;
 }
 
-cl_uint mExecuteMultiplyKernelCustom2(ocl_args_d_t* ocl, const size_t global[2],  const size_t local[2])
+cl_uint executeMultiplyKernel(ocl_args_d_t* ocl, const size_t global[2],  const size_t local[2])
 {
     cl_int err = CL_SUCCESS;
 
@@ -1351,7 +1361,7 @@ cl_uint forwardpassClassifier(ocl_args_d_t* ocl, cl_mem* buffersWeightsArray, cl
             {
                 return -1;
             }
-            if (CL_SUCCESS != mExecuteMultiplyKernelCustom(ocl, mDim, nDim))
+            if (CL_SUCCESS != mExecuteMultiplyKernelCustom(ocl,mDim ,nDim))
             {
                 return -1;
             }
@@ -1531,11 +1541,350 @@ cl_uint backpropClassifier(ocl_args_d_t* ocl, cl_mem* buffersWeightsArray, cl_me
     _aligned_free(preSoftmaxOutputs);
     _aligned_free(softmaxOutputs);
     _aligned_free(deltas);
+    _aligned_free(choices);
     clReleaseKernel(optimKernel);
     clReleaseKernel(simpleKernel);
 }
 
-cl_uint validationClassifier(ocl_args_d_t* ocl, cl_mem* buffersWeightsArray, cl_mem* buffersBiasesArray, cl_mem* buffersOutsArray, cl_mem* bufferInputArray, int dimensions[],
+cl_uint backpropClassifier2(ocl_args_d_t* ocl, cl_mem* buffersWeightsArray, cl_mem* buffersBiasesArray, cl_mem* buffersOutsArray, cl_mem* buffersDeltasArray, cl_mem* bufferInputArray, int dimensions[],
+    int* ActivationFunctions, cl_kernel* activationFunctionDeltaKernels, cl_kernel* activationFunctionDeltaKernelsSimple, cl_float* correctOutput, cl_float* costs, cl_float learning_rate, int iter, int batchSize, int layers, int classes) {
+
+    std::cout << "In backprop for iter " << iter << " \n";
+    cl_int err = CL_SUCCESS;
+
+    cl_uint optimizedSizeNetworkOutput = ((sizeof(cl_float) * batchSize * classes - 1) / 64 + 1) * 64;
+    cl_float* preSoftmaxOutputs = (cl_float*)_aligned_malloc(optimizedSizeNetworkOutput, 4096);
+    cl_float* softmaxOutputs = (cl_float*)_aligned_malloc(optimizedSizeNetworkOutput, 4096);
+    cl_float* deltas = (cl_float*)_aligned_malloc(optimizedSizeNetworkOutput, 4096);
+
+    cl_uint optimizedSizeNetworkOutput2 = ((sizeof(int) * batchSize - 1) / 64 + 1) * 64;
+    int* choices = (int*)_aligned_malloc(optimizedSizeNetworkOutput2, 4096);
+
+    err = clEnqueueReadBuffer(ocl->commandQueue, ocl->dstMem, true, 0, sizeof(cl_float) * classes * batchSize, preSoftmaxOutputs, 0, NULL, NULL);
+    if (CL_SUCCESS != err)
+    {
+        LogError("Error: clEnqueueReadBuffer returned %s\n", TranslateOpenCLError(err));
+    }
+
+    int idx, correctClass;
+    cl_float maxval, temp;
+    for (int i = 0; i < batchSize; ++i) {
+        //std::cout << "Entering calculation for batch element " << i << "\n";
+        idx = 0;
+        temp = 0.0f;
+        maxval = -FLT_MAX;
+        correctClass = (int)correctOutput[i];
+        for (int j = 0; j < classes; ++j) {
+            //std::cout << "presoftmax for " << j << " th class and batch item " << i << " is " << preSoftmaxOutputs[j * batchSize + i] << '\n';
+            if (preSoftmaxOutputs[j * batchSize + i] > maxval) {
+                idx = j;
+                maxval = preSoftmaxOutputs[j * batchSize + i];
+            }
+        }
+        choices[i] = idx;
+        for (int j = 0; j < classes; ++j) {
+            preSoftmaxOutputs[j * batchSize + i] = preSoftmaxOutputs[j * batchSize + i] - maxval;
+            softmaxOutputs[j * batchSize + i] = exp(preSoftmaxOutputs[j * batchSize + i]);
+            temp += exp(preSoftmaxOutputs[j * batchSize + i]);
+        }
+        for (int j = 0; j < classes; ++j) {
+            softmaxOutputs[j * batchSize + i] = softmaxOutputs[j * batchSize + i] / temp;
+        }
+    }
+
+    //These delta calculation formulas correspond to a CEL cost function
+    for (int i = 0; i < batchSize; ++i) {
+        correctClass = (int)correctOutput[i];
+        for (int j = 0; j < classes; ++j) {
+            if (j == correctClass) {
+                deltas[j * batchSize + i] = softmaxOutputs[j * batchSize + i] - 1.0f;
+            }
+            else {
+                deltas[j * batchSize + i] = softmaxOutputs[j * batchSize + i];
+            }
+            //std::cout<<"Delta for batch item "<<i<<" and class "<<j<<" is "<< deltas[j * batchSize + i]<<'\n';
+        }
+    }
+
+    //Here I am actually returning the accuracy
+    costs[iter] = AccuracyFunction(correctOutput, choices, batchSize);
+
+    err = clEnqueueWriteBuffer(ocl->commandQueue, buffersDeltasArray[layers - 1], true, 0, sizeof(cl_float) * batchSize * classes, deltas, 0, NULL, NULL);
+    if (CL_SUCCESS != err)
+    {
+        LogError("Error: clEnqueueReadBuffer returned %s\n", TranslateOpenCLError(err));
+    }
+
+    //non-output deltas calculation loop
+    ocl->dstMem = buffersDeltasArray[layers - 1];
+    cl_mem outputs;
+    cl_kernel optimKernel = clCreateKernel(ocl->program, "Update_Weights_Buffers", &err);
+    cl_kernel simpleKernel = clCreateKernel(ocl->programSimple, "Update_Weights_Buffers", &err);
+    if (CL_SUCCESS != err)
+    {
+        LogError("Error: clCreateKernel returned %s\n", TranslateOpenCLError(err));
+        return -1;
+    }
+    int mDim, pDim, nDim;
+    for (int x = layers - 1; x >= 0; --x) {
+
+
+        mDim = dimensions[x];
+        pDim = dimensions[x + 1];
+        nDim = batchSize;
+        ocl->srcA = buffersWeightsArray[x];
+        ocl->srcB = buffersDeltasArray[x];
+        ocl->dstMem = buffersDeltasArray[x - 1];
+        outputs = buffersOutsArray[x - 1];
+        if (x != 0) {
+            if (mDim % 16 == 0 && nDim % 16 == 0) {
+                ocl->kernel = activationFunctionDeltaKernels[ActivationFunctions[x]];
+                if (CL_SUCCESS != mSetKernelArguments(ocl, &outputs, mDim, pDim, nDim, 0.0, 2))
+                {
+                    return -1;
+                }
+                if (CL_SUCCESS != mExecuteMultiplyKernelCustom(ocl, mDim, nDim))
+                {
+                    return -1;
+                }
+            }
+            else {
+                ocl->kernel = activationFunctionDeltaKernelsSimple[ActivationFunctions[x]];
+                if (CL_SUCCESS != mSetKernelArguments(ocl, &outputs, mDim, pDim, nDim, 0.0, 2))
+                {
+                    return -1;
+                }
+                if (CL_SUCCESS != mExecuteMultiplyKernel(ocl, mDim, nDim))
+                {
+                    return -1;
+                }
+            }
+        }
+
+        mDim = dimensions[x + 1];
+        pDim = batchSize;
+        nDim = dimensions[x];
+        ocl->srcA = buffersDeltasArray[x];
+        ocl->dstMem = buffersWeightsArray[x];
+        if (x != 0) {
+            ocl->srcB = buffersOutsArray[x - 1];
+        }
+        else {
+            ocl->srcB = *bufferInputArray;
+        }
+
+        if (mDim % 16 == 0 && nDim % 16 == 0) {
+            ocl->kernel = optimKernel;
+            if (CL_SUCCESS != mSetKernelArguments(ocl, &(buffersBiasesArray[x]), mDim, pDim, nDim, learning_rate, 3))
+            {
+                return -1;
+            }
+
+            if (CL_SUCCESS != mExecuteMultiplyKernelCustom(ocl, mDim, nDim)) //thankfully, the same function works for our Multiply_Deltas kernel too
+            {
+                return -1;
+            }
+        }
+        else {
+            ocl->kernel = simpleKernel;
+            if (CL_SUCCESS != mSetKernelArguments(ocl, &(buffersBiasesArray[x]), mDim, pDim, nDim, learning_rate, 3))
+            {
+                return -1;
+            }
+
+            if (CL_SUCCESS != mExecuteMultiplyKernel(ocl, mDim, nDim)) //thankfully, the same function works for our Multiply_Deltas kernel too
+            {
+                return -1;
+            }
+        }
+    }
+
+    //perform weight updates now. We can potentially parallelize this fully even across all network layers
+    //but for now it's only across the weights of each layer and then sequentially across layers
+    pDim = batchSize;
+    clReleaseKernel(optimKernel);
+    clReleaseKernel(simpleKernel);
+    _aligned_free(preSoftmaxOutputs);
+    _aligned_free(softmaxOutputs);
+    _aligned_free(choices);
+    _aligned_free(deltas);
+    clReleaseKernel(optimKernel);
+    clReleaseKernel(simpleKernel);
+}
+
+cl_uint backpropClassifier3(ocl_args_d_t* ocl, cl_mem* buffersWeightsArray, cl_mem* buffersBiasesArray, cl_mem* buffersOutsArray, cl_mem* buffersDeltasArray, cl_mem* bufferInputArray, int dimensions[],
+    int* ActivationFunctions, cl_kernel* activationFunctionDeltaKernels, cl_kernel* activationFunctionDeltaKernelsSimple, cl_float* correctOutput, cl_float* costs, cl_float learning_rate, int iter, int batchSize, int layers, int classes) {
+
+    std::cout << "In backprop for iter " << iter << " \n";
+    cl_int err = CL_SUCCESS;
+
+    cl_uint optimizedSizeNetworkOutput = ((sizeof(cl_float) * batchSize * classes - 1) / 64 + 1) * 64;
+    cl_float* preSoftmaxOutputs = (cl_float*)_aligned_malloc(optimizedSizeNetworkOutput, 4096);
+    cl_float* softmaxOutputs = (cl_float*)_aligned_malloc(optimizedSizeNetworkOutput, 4096);
+    cl_float* deltas = (cl_float*)_aligned_malloc(optimizedSizeNetworkOutput, 4096);
+
+    cl_uint optimizedSizeNetworkOutput2 = ((sizeof(int) * batchSize - 1) / 64 + 1) * 64;
+    int* choices = (int*)_aligned_malloc(optimizedSizeNetworkOutput2, 4096);
+
+    err = clEnqueueReadBuffer(ocl->commandQueue, ocl->dstMem, true, 0, sizeof(cl_float) * classes * batchSize, preSoftmaxOutputs, 0, NULL, NULL);
+    if (CL_SUCCESS != err)
+    {
+        LogError("Error: clEnqueueReadBuffer returned %s\n", TranslateOpenCLError(err));
+    }
+
+    int idx, correctClass;
+    cl_float maxval, temp;
+    for (int i = 0; i < batchSize; ++i) {
+        //std::cout << "Entering calculation for batch element " << i << "\n";
+        idx = 0;
+        temp = 0.0f;
+        maxval = -FLT_MAX;
+        correctClass = (int)correctOutput[i];
+        for (int j = 0; j < classes; ++j) {
+            //std::cout << "presoftmax for " << j << " th class and batch item " << i << " is " << preSoftmaxOutputs[j * batchSize + i] << '\n';
+            if (preSoftmaxOutputs[j * batchSize + i] > maxval) {
+                idx = j;
+                maxval = preSoftmaxOutputs[j * batchSize + i];
+            }
+        }
+        choices[i] = idx;
+        for (int j = 0; j < classes; ++j) {
+            preSoftmaxOutputs[j * batchSize + i] = preSoftmaxOutputs[j * batchSize + i] - maxval;
+            softmaxOutputs[j * batchSize + i] = exp(preSoftmaxOutputs[j * batchSize + i]);
+            temp += exp(preSoftmaxOutputs[j * batchSize + i]);
+        }
+        for (int j = 0; j < classes; ++j) {
+            softmaxOutputs[j * batchSize + i] = softmaxOutputs[j * batchSize + i] / temp;
+        }
+    }
+
+    //These delta calculation formulas correspond to a CEL cost function
+    for (int i = 0; i < batchSize; ++i) {
+        correctClass = (int)correctOutput[i];
+        for (int j = 0; j < classes; ++j) {
+            if (j == correctClass) {
+                deltas[j * batchSize + i] = softmaxOutputs[j * batchSize + i] - 1.0f;
+            }
+            else {
+                deltas[j * batchSize + i] = softmaxOutputs[j * batchSize + i];
+            }
+            //std::cout<<"Delta for batch item "<<i<<" and class "<<j<<" is "<< deltas[j * batchSize + i]<<'\n';
+        }
+    }
+
+    //Here I am actually returning the accuracy
+    costs[iter] = AccuracyFunction(correctOutput, choices, batchSize);
+
+    err = clEnqueueWriteBuffer(ocl->commandQueue, buffersDeltasArray[1], true, 0, sizeof(cl_float) * batchSize * classes, deltas, 0, NULL, NULL);
+    if (CL_SUCCESS != err)
+    {
+        LogError("Error: clEnqueueReadBuffer returned %s\n", TranslateOpenCLError(err));
+    }
+
+    //non-output deltas calculation loop
+    ocl->dstMem = buffersDeltasArray[1];
+    ocl->srcB = buffersDeltasArray[0];
+    cl_mem outputs;
+    cl_kernel optimKernel = clCreateKernel(ocl->program, "Update_Weights_Buffers", &err);
+    cl_kernel simpleKernel = clCreateKernel(ocl->programSimple, "Update_Weights_Buffers", &err);
+    if (CL_SUCCESS != err)
+    {
+        LogError("Error: clCreateKernel returned %s\n", TranslateOpenCLError(err));
+        return -1;
+    }
+    int mDim, pDim, nDim;
+    cl_mem tempcl_mem1, tempcl_mem2;
+    for (int x = layers - 1; x >= 0; --x) {
+        
+        mDim = dimensions[x];
+        pDim = dimensions[x + 1];
+        nDim = batchSize;
+        tempcl_mem1 = ocl->srcB;
+        ocl->srcA = buffersWeightsArray[x];
+        ocl->srcB = ocl-> dstMem;
+        ocl->dstMem = tempcl_mem1;
+        outputs = buffersOutsArray[x - 1];
+        if (x != 0) {
+            if (mDim % 16 == 0 && nDim % 16 == 0) {
+                ocl->kernel = activationFunctionDeltaKernels[ActivationFunctions[x]];
+                if (CL_SUCCESS != mSetKernelArguments(ocl, &outputs, mDim, pDim, nDim, 0.0, 2))
+                {
+                    return -1;
+                }
+                if (CL_SUCCESS != mExecuteMultiplyKernelCustom(ocl, mDim, nDim))
+                {
+                    return -1;
+                }
+            }
+            else {
+                ocl->kernel = activationFunctionDeltaKernelsSimple[ActivationFunctions[x]];
+                if (CL_SUCCESS != mSetKernelArguments(ocl, &outputs, mDim, pDim, nDim, 0.0, 2))
+                {
+                    return -1;
+                }
+                if (CL_SUCCESS != mExecuteMultiplyKernel(ocl, mDim, nDim))
+                {
+                    return -1;
+                }
+            }
+        }
+
+        mDim = dimensions[x + 1];
+        pDim = batchSize;
+        nDim = dimensions[x];
+        tempcl_mem1 = ocl->srcB;
+        tempcl_mem2 = ocl->dstMem;
+        ocl->srcA = ocl->srcB;
+        ocl->dstMem = buffersWeightsArray[x];
+        if (x != 0) {
+            ocl->srcB = buffersOutsArray[x - 1];
+        }
+        else {
+            ocl->srcB = *bufferInputArray;
+        }
+
+        if (mDim % 16 == 0 && nDim % 16 == 0) {
+            ocl->kernel = optimKernel;
+            if (CL_SUCCESS != mSetKernelArguments(ocl, &(buffersBiasesArray[x]), mDim, pDim, nDim, learning_rate, 3))
+            {
+                return -1;
+            }
+
+            if (CL_SUCCESS != mExecuteMultiplyKernelCustom(ocl, mDim, nDim)) //thankfully, the same function works for our Multiply_Deltas kernel too
+            {
+                return -1;
+            }
+        }
+        else {
+            ocl->kernel = simpleKernel;
+            if (CL_SUCCESS != mSetKernelArguments(ocl, &(buffersBiasesArray[x]), mDim, pDim, nDim, learning_rate, 3))
+            {
+                return -1;
+            }
+
+            if (CL_SUCCESS != mExecuteMultiplyKernel(ocl, mDim, nDim)) //thankfully, the same function works for our Multiply_Deltas kernel too
+            {
+                return -1;
+            }
+        }
+        ocl->srcB = tempcl_mem1;
+        ocl->dstMem = tempcl_mem2;
+    }
+
+    //perform weight updates now. We can potentially parallelize this fully even across all network layers
+    //but for now it's only across the weights of each layer and then sequentially across layers
+    pDim = batchSize;
+    clReleaseKernel(optimKernel);
+    clReleaseKernel(simpleKernel);
+    _aligned_free(preSoftmaxOutputs);
+    _aligned_free(softmaxOutputs);
+    _aligned_free(deltas);
+    _aligned_free(choices);
+    clReleaseKernel(optimKernel);
+    clReleaseKernel(simpleKernel);
+}
+
+cl_uint testingClassifier(ocl_args_d_t* ocl, cl_mem* buffersWeightsArray, cl_mem* buffersBiasesArray, cl_mem* buffersOutsArray, cl_mem* bufferInputArray, int dimensions[],
     int* ActivationFunctions, cl_kernel* activationFunctionKernels, cl_kernel* activationFunctionKernelsSimple, int layers, int classes, uchar** valDataset, uchar* valLabels, int numValImages ) {
     
     std::cout << "In validation \n";
@@ -1606,20 +1955,30 @@ cl_uint validationClassifier(ocl_args_d_t* ocl, cl_mem* buffersWeightsArray, cl_
         // To call the kernel, you need to create it from existing program.
         if (mDim % 16 == 0 && nDim % 16 == 0) {
             ocl->kernel = activationFunctionKernels[ActivationFunctions[x]];
+            // Passing arguments into OpenCL kernel.
+            if (CL_SUCCESS != mSetKernelArguments(ocl, &(buffersBiasesArray[x]), mDim, pDim, nDim, 0.0, 1))
+            {
+                return -1;
+            }
+            if (CL_SUCCESS != mExecuteMultiplyKernelCustom(ocl, mDim, nDim))
+            {
+                return -1;
+            }
         }
         else {
             ocl->kernel = activationFunctionKernelsSimple[ActivationFunctions[x]];
+            // Passing arguments into OpenCL kernel.
+            if (CL_SUCCESS != mSetKernelArguments(ocl, &(buffersBiasesArray[x]), mDim, pDim, nDim, 0.0, 1))
+            {
+                return -1;
+            }
+            if (CL_SUCCESS != mExecuteMultiplyKernel(ocl, mDim, nDim))
+            {
+                return -1;
+            }
         }
 
-        // Passing arguments into OpenCL kernel.
-        if (CL_SUCCESS != mSetKernelArguments(ocl, &(buffersBiasesArray[x]), mDim, pDim, nDim, 0.0, 1))
-        {
-            return -1;
-        }
-        if (CL_SUCCESS != mExecuteMultiplyKernel(ocl, mDim, nDim))
-        {
-            return -1;
-        }
+
     }
 
     cl_uint optimizedSizeNetworkOutput = ((sizeof(cl_float) * numValImages * classes - 1) / 64 + 1) * 64;
@@ -1664,6 +2023,14 @@ cl_uint validationClassifier(ocl_args_d_t* ocl, cl_mem* buffersWeightsArray, cl_
 
     //Here I am actually returning the accuracy
     cl_float accuracy = AccuracyFunction(correctOutput, choices, numValImages);
+    _aligned_free(softmaxOutputs);
+    _aligned_free(preSoftmaxOutputs);
+    _aligned_free(inArray);
+    for (int i = 0; i < numValImages; ++i) {
+        free(valDataset[i]);
+    }
+    free(valDataset);
+    free(valLabels);
     std::cout << "Validation set accuracy is " << accuracy << '\n';
 }
 
@@ -1732,7 +2099,7 @@ cl_uint initializeparams(ocl_args_d_t* ocl, cl_mem** buffersWeightsArray, cl_mem
             LogError("Error: clCreateImage for srcA returned %s\n", TranslateOpenCLError(err));
             return err;
         }
-        _aligned_free(tempWeightArray);
+        _aligned_free(inArray);
     }
 }
 
@@ -2264,6 +2631,9 @@ void forwardpassClassifierCpp(float** weightArrays, float** biasArrays, float** 
     float* srcA, * srcB;
     float* dstMem = inputArray;
     int mDim, pDim, nDim = batchSize, kernel;
+    auto start = high_resolution_clock::now();
+    auto elapsed = std::chrono::high_resolution_clock::now() - start;
+    long long microseconds;
     for (int x = 0; x < layers; ++x) {
 
         mDim = dimensions[x + 1];
@@ -2276,7 +2646,15 @@ void forwardpassClassifierCpp(float** weightArrays, float** biasArrays, float** 
         kernel = activationFunctions[x];
         switch (kernel) {
         case 0:
+
+
+            std::cout << "ENTERING Cpp kernel calculation" << '\n';
+            start = high_resolution_clock::now();
             multiplyIdKernelCpp(srcA, srcB, dstMem, mDim, pDim, nDim, biasArrays[x]);
+            elapsed = std::chrono::high_resolution_clock::now() - start;
+            microseconds = std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count();
+            std::cout << microseconds << " microseconds for training \n";
+            system("pause");
             break;
         case 1:
             multiplySigmoidKernelCpp(srcA, srcB, dstMem, mDim, pDim, nDim, biasArrays[x]);
@@ -2352,6 +2730,9 @@ void backpropClassifierCpp(float** weightArrays, float** biasArrays, float** out
     float* srcA, * srcB, * dstMem;
     dstMem = deltaArrays[layers-1];
     int mDim, pDim, nDim = batchSize, kernel;
+    auto start = high_resolution_clock::now();
+    auto elapsed = std::chrono::high_resolution_clock::now() - start;
+    long long microseconds;
     for (int x = layers - 1; x > 0; --x) {
 
         mDim = dimensions[x];
@@ -2363,7 +2744,14 @@ void backpropClassifierCpp(float** weightArrays, float** biasArrays, float** out
         kernel = activationFunctions[x];
         switch (kernel) {
         case 0:
+
+            std::cout << "ENTERING Cpp delta kernel calculation" << '\n';
+            start = high_resolution_clock::now();
             multiplyDeltasId(srcA, srcB, dstMem, mDim, pDim, nDim);
+            elapsed = std::chrono::high_resolution_clock::now() - start;
+            microseconds = std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count();
+            std::cout << microseconds << " microseconds for training \n";
+            system("pause");
             break;
         case 1:
             multiplyDeltasSigmoid(srcA, srcB, dstMem, mDim, pDim, nDim, outputArrays[x - 1]);
@@ -2392,11 +2780,18 @@ void backpropClassifierCpp(float** weightArrays, float** biasArrays, float** out
         else {
             srcB = inputArray;
         }
+        std::cout << "ENTERING Cpp weight update kernel calculation" << '\n';
+        std::cout << "Dimensions are" << mDim << " " << pDim << " " << nDim << '\n';
+        start = high_resolution_clock::now();
         updateWeights(srcA, srcB, dstMem, mDim, pDim, nDim, biasArrays[x], learning_rate);
+        elapsed = std::chrono::high_resolution_clock::now() - start;
+        microseconds = std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count();
+        std::cout << microseconds << " microseconds for training \n";
+        system("pause");
     }
 }
 
-int validationClassifierCpp(float** weightArrays, float** biasArrays, float** outputArrays, int dimensions[],
+int testingClassifierCpp(float** weightArrays, float** biasArrays, float** outputArrays, int dimensions[],
     int* activationFunctions, int layers, int classes, uchar** valDataset, uchar* valLabels, int numValImages) {
 
     std::cout << "In validation \n";
@@ -2579,10 +2974,9 @@ int minibatchGDCpp(int dimensions[], int* activationFunctions, int batchSize, in
         _aligned_free(deltaArrays[x]);
     }
     _aligned_free(deltaArrays);
-    _aligned_free(inputArrays);
     _aligned_free(costs);
 
-    validationClassifierCpp(weightArrays, biasArrays, outputArrays, dimensions, activationFunctions, layers, classes, valDataset, valLabels, numValImages);
+    testingClassifierCpp(weightArrays, biasArrays, outputArrays, dimensions, activationFunctions, layers, classes, valDataset, valLabels, numValImages);
 
     for (cl_uint x = 0; x < layers; ++x) {
         //std::cout << "releasing obj num" << x;
@@ -2599,6 +2993,7 @@ int minibatchGDCpp(int dimensions[], int* activationFunctions, int batchSize, in
     _aligned_free(weightArrays);
     _aligned_free(biasArrays);
     _aligned_free(outputArrays);
+    _aligned_free(inputArrays);
     return 0;
 }
 
@@ -2896,6 +3291,7 @@ uchar* read_mnist_labels(std::string full_path, int& number_of_labels) {
 
         file.read((char*)&number_of_labels, sizeof(number_of_labels)), number_of_labels = reverseInt(number_of_labels);
 
+        int optimizedSize = ((sizeof(uchar) * number_of_labels - 1) / 64 + 1) * 64;
         uchar* _dataset = new uchar[number_of_labels];
         for (int i = 0; i < number_of_labels; i++) {
             file.read((char*)&_dataset[i], 1);
@@ -2951,6 +3347,12 @@ cl_uint minibatchGD(ocl_args_d_t* ocl, int dimensions[], int* activationFunction
             return err;
         }
     }
+
+    for (int i = 0; i < numTrainImages; i++) {
+        free(dataset[i]);
+    }
+    free(dataset);
+    free(labels);
 
     if (NULL == weightBuffers || NULL == biasBuffers||NULL == outputBuffers || NULL == deltaBuffers || NULL == inputBuffer || NULL == correctOutput)
     {
@@ -3039,10 +3441,9 @@ cl_uint minibatchGD(ocl_args_d_t* ocl, int dimensions[], int* activationFunction
     std::cout<<"dimension[0] is "<<dimensions[0]<<'\n';
     std::cout << "numValImages is " << numValImages << '\n';
     //For reasonably sized validation datasets, a single pass with a wide matrix is enough
-    validationClassifier(ocl, weightBuffers, biasBuffers, outputBuffers, &(inputBuffer[0]), dimensions, activationFunctions, activationFunctionKernels,
+    testingClassifier(ocl, weightBuffers, biasBuffers, outputBuffers, &(inputBuffer[0]), dimensions, activationFunctions, activationFunctionKernels,
         activationFunctionKernelsSimple, layers, classes, valDataset, valLabels, numValImages);
-    std::cout << "allright" << '\n';
-    system("pause");
+
     for (cl_uint x = 0; x < layers; ++x) {
         //std::cout << "releasing obj num" << x;
         clReleaseMemObject(outputBuffers[x]);
@@ -3050,17 +3451,183 @@ cl_uint minibatchGD(ocl_args_d_t* ocl, int dimensions[], int* activationFunction
         clReleaseMemObject(biasBuffers[x]);
         clReleaseMemObject(deltaBuffers[x]);
     }
-    std::cout << "allright2" << '\n';
-    system("pause");
     for (cl_uint x = 0; x < itersPerEpoch-1; ++x) {
-        //std::cout << "releasing obj num" << x;
         clReleaseMemObject(inputBuffer[x]);
-        std::cout << "allright2.5" << '\n';
-        system("pause");
         _aligned_free(correctOutput[x]);
     }
-    std::cout << "allright3" << '\n';
-    system("pause");
+
+    _aligned_free(correctOutput);
+    _aligned_free(weightBuffers);
+    _aligned_free(biasBuffers);
+    _aligned_free(outputBuffers);
+    _aligned_free(deltaBuffers);
+    _aligned_free(inputBuffer);
+    _aligned_free(costs);
+}
+
+cl_uint minibatchGD2(ocl_args_d_t* ocl, int dimensions[], int* activationFunctions, cl_kernel* activationFunctionKernels, cl_kernel* activationFunctionKernelsSimple,
+    cl_kernel* activationFunctionDeltaKernels, cl_kernel* activationFunctionDeltaKernelsSimple, int batchSize, int layers, int classes, int epochs,
+    uchar** dataset, uchar* labels, int numTrainImages, uchar** valDataset, uchar* valLabels, int numValImages) {
+
+    cl_float** weightsArray;
+    cl_mem* weightBuffers, * biasBuffers, * outputBuffers, * deltaBuffers, * inputBuffer;//, *groundTruthBuffer;
+    cl_float* costs;
+
+    std::cout << "Num of val images is " << numValImages << '\n';
+
+    int itersPerEpoch = (numTrainImages - 1) / batchSize + 1;
+    int iterations = epochs * (itersPerEpoch - 1);
+
+    cl_int err = CL_SUCCESS;
+    cl_uint optimizedSize = ((sizeof(cl_mem) * layers - 1) / 64 + 1) * 64;
+    weightBuffers = (cl_mem*)_aligned_malloc(optimizedSize, 4096); //array of memory objects, where each memory object is a buffer of weights between layers
+    biasBuffers = (cl_mem*)_aligned_malloc(optimizedSize, 4096); //array of memory objects, where each memory object is a buffer of biases for some layer
+    outputBuffers = (cl_mem*)_aligned_malloc(optimizedSize, 4096); //array of memory objects, where each memory object is a buffer image of outputs of layers
+    deltaBuffers = (cl_mem*)_aligned_malloc(optimizedSize, 4096); //array of memory objects, where each memory object is an image of deltas of layers
+
+    optimizedSize = ((sizeof(cl_mem) * (itersPerEpoch - 1) - 1) / 64 + 1) * 64;
+    inputBuffer = (cl_mem*)_aligned_malloc(optimizedSize, 4096);
+
+    cl_uint optimizedSizeIn = ((sizeof(cl_float) * dimensions[0] * batchSize - 1) / 64 + 1) * 64;
+    cl_uint optimizedSizeOut = ((sizeof(cl_float*) * (itersPerEpoch - 1) - 1) / 64 + 1) * 64;
+    cl_float* inArray = (cl_float*)_aligned_malloc(optimizedSizeIn, 4096); //array of network input
+    cl_float** correctOutput = (cl_float**)_aligned_malloc(optimizedSizeOut, 4096); //array of network grount truth
+
+    optimizedSizeOut = ((sizeof(cl_float) * batchSize - 1) / 64 + 1) * 64;
+    for (int iter = 0; iter < itersPerEpoch - 1; ++iter) {
+        correctOutput[iter] = (cl_float*)_aligned_malloc(optimizedSizeOut, 4096);
+        for (int i = 0; i < batchSize; ++i) {
+            for (int j = 0; j < dimensions[0]; ++j) {
+                inArray[j * batchSize + i] = (cl_float)dataset[i + batchSize * iter][j];
+            }
+            correctOutput[iter][i] = labels[i + batchSize * iter];
+        }
+        inputBuffer[iter] = clCreateBuffer(ocl->context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, optimizedSizeIn, inArray, &err);
+        if (CL_SUCCESS != err)
+        {
+            LogError("Error: creating input buffer returned %s\n", TranslateOpenCLError(err));
+            return err;
+        }
+    }
+
+    for (int i = 0; i < numTrainImages; i++) {
+        free(dataset[i]);
+    }
+    free(dataset);
+    free(labels);
+
+    if (NULL == weightBuffers || NULL == biasBuffers || NULL == outputBuffers || NULL == deltaBuffers || NULL == inputBuffer || NULL == correctOutput)
+    {
+        LogError("Error: _aligned_malloc failed to allocate buffers.\n");
+        return -1;
+    }
+
+    //initializing weights, outputs and delta buffers
+    int optimizedSizeCosts = ((sizeof(cl_float) * epochs * (itersPerEpoch - 1) - 1) / 64 + 1) * 64;
+    costs = (cl_float*)_aligned_malloc(optimizedSizeCosts, 4096);
+
+    cl_uint optimizedSize1;
+    cl_uint optimizedSize2;
+    cl_float* tempWeightArray;
+    cl_float* tempBiasArray;
+    int mDim, pDim;
+
+    for (cl_uint x = 0; x < layers; ++x) {
+        mDim = dimensions[x + 1];
+        pDim = dimensions[x];
+        optimizedSize1 = ((sizeof(cl_float) * mDim * pDim - 1) / 64 + 1) * 64;
+        optimizedSize2 = ((sizeof(cl_float) * mDim - 1) / 64 + 1) * 64;
+        tempWeightArray = (cl_float*)_aligned_malloc(optimizedSize1, 4096);
+        tempBiasArray = (cl_float*)_aligned_malloc(optimizedSize2, 4096);
+        std::cout << "Weights of layer " << x << " are: \n";
+        mGenerateMatrices(tempWeightArray, mDim, pDim);
+        mGenerateMatrices(tempBiasArray, mDim, 1);
+
+        // Create first buffer based on host memory inputA
+        weightBuffers[x] = clCreateBuffer(ocl->context, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR, sizeof(cl_float) * mDim * pDim, tempWeightArray, &err);
+        if (CL_SUCCESS != err)
+        {
+            LogError("Error: clCreateBuffer for weightBuffers returned %s\n", TranslateOpenCLError(err));
+            return err;
+        }
+
+        biasBuffers[x] = clCreateBuffer(ocl->context, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR, sizeof(cl_float) * mDim, tempBiasArray, &err);
+        if (CL_SUCCESS != err)
+        {
+            LogError("Error: clCreateBuffer for biasBuffers returned %s\n", TranslateOpenCLError(err));
+            return err;
+        }
+
+        outputBuffers[x] = clCreateBuffer(ocl->context, CL_MEM_READ_WRITE, sizeof(cl_float) * mDim * batchSize, NULL, &err);
+        if (CL_SUCCESS != err)
+        {
+            LogError("Error: clCreateBuffer for outputBuffers returned %s\n", TranslateOpenCLError(err));
+            return err;
+        }
+
+        _aligned_free(tempWeightArray);
+        _aligned_free(tempBiasArray);
+    }
+
+    int maxmDim = 0;
+    for (int i = 1; i < layers + 1; ++i) {
+        if (dimensions[i] > maxmDim) {
+            maxmDim = dimensions[i];
+        }
+    }
+    deltaBuffers[0] = clCreateBuffer(ocl->context, CL_MEM_READ_WRITE, sizeof(cl_float) * maxmDim * batchSize, NULL, &err);
+    deltaBuffers[1] = clCreateBuffer(ocl->context, CL_MEM_READ_WRITE, sizeof(cl_float) * maxmDim * batchSize, NULL, &err);
+    if (CL_SUCCESS != err)
+    {
+        LogError("Error: clCreateBuffer for deltaBuffersreturned %s\n", TranslateOpenCLError(err));
+        return err;
+    }
+
+
+    cl_float learning_rate = 0.0008;
+    cl_float temptot;
+    std::cout << "iters per epoch is " << (itersPerEpoch - 1) << '\n';
+    for (int epoch = 0; epoch < epochs; ++epoch) {
+        std::cout << "epoch " << epoch << " hereeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee \n";
+        int batchSizeTemp = batchSize;
+        learning_rate *= 0.92;
+        for (int i = 0; i < itersPerEpoch - 1; ++i) {
+            std::cout << "ENTERING OPENCL FORWARD" << "\n";
+            forwardpassClassifier(ocl, weightBuffers, biasBuffers, outputBuffers, &(inputBuffer[i]), dimensions, activationFunctions, activationFunctionKernels, activationFunctionKernelsSimple, batchSizeTemp, layers);
+            std::cout << "ENTERING OPENCL BACKWARD" << "\n";
+            backpropClassifier3(ocl, weightBuffers, biasBuffers, outputBuffers, deltaBuffers, &(inputBuffer[i]), dimensions, activationFunctions, activationFunctionDeltaKernels, activationFunctionDeltaKernelsSimple, correctOutput[i], costs, learning_rate, (epoch * (itersPerEpoch - 1) + i), batchSizeTemp, layers, classes);
+        }
+        temptot = 0.0f;
+        for (int i = 0; i < itersPerEpoch - 1; ++i) {
+            temptot += costs[epoch * (itersPerEpoch - 1) + i];
+        }
+        std::cout << "average accuracy for epoch " << epoch << " is " << temptot / (itersPerEpoch - 1) << '\n';
+    }
+
+    for (int i = 0; i < iterations; i++) {
+        std::cout << costs[i] << '\n';
+    }
+
+    std::cout << "dimension[0] is " << dimensions[0] << '\n';
+    std::cout << "numValImages is " << numValImages << '\n';
+    //For reasonably sized validation datasets, a single pass with a wide matrix is enough
+    testingClassifier(ocl, weightBuffers, biasBuffers, outputBuffers, &(inputBuffer[0]), dimensions, activationFunctions, activationFunctionKernels,
+        activationFunctionKernelsSimple, layers, classes, valDataset, valLabels, numValImages);
+
+    for (cl_uint x = 0; x < layers; ++x) {
+        //std::cout << "releasing obj num" << x;
+        clReleaseMemObject(outputBuffers[x]);
+        clReleaseMemObject(weightBuffers[x]);
+        clReleaseMemObject(biasBuffers[x]);
+    }
+
+    clReleaseMemObject(deltaBuffers[0]);
+    clReleaseMemObject(deltaBuffers[1]);
+
+    for (cl_uint x = 0; x < itersPerEpoch - 1; ++x) {
+        clReleaseMemObject(inputBuffer[x]);
+        _aligned_free(correctOutput[x]);
+    }
     _aligned_free(weightBuffers);
     _aligned_free(biasBuffers);
     _aligned_free(outputBuffers);
@@ -3088,7 +3655,7 @@ cl_int kernelCorrectnessTesting(ocl_args_d_t* ocl, char** activationFunctionKern
     cl_float* auxiliaryMatrixar = (cl_float*)_aligned_malloc(optimizedSizeTempC, 4096);
     mGenerateMatrices(matrixAar, mDim, pDim);
     mGenerateMatrices(matrixBar, pDim, nDim);
-    mGenerateMatrices(auxiliaryMatrixar, pDim, nDim);
+    mGenerateMatrices(auxiliaryMatrixar, mDim, nDim);
     mGenerateMatrices(biasesar, mDim, 1);
 
 
@@ -3133,7 +3700,7 @@ cl_int kernelCorrectnessTesting(ocl_args_d_t* ocl, char** activationFunctionKern
         }
 
         start = high_resolution_clock::now();
-        if (CL_SUCCESS != mExecuteMultiplyKernelCustom2(ocl, global, local))
+        if (CL_SUCCESS != executeMultiplyKernel(ocl, global, local))
         {
             return -1;
         }
@@ -3156,7 +3723,7 @@ cl_int kernelCorrectnessTesting(ocl_args_d_t* ocl, char** activationFunctionKern
             return -1;
         }
         start = high_resolution_clock::now();
-        if (CL_SUCCESS != mExecuteMultiplyKernelCustom2(ocl, globalSimple, NULL))
+        if (CL_SUCCESS != executeMultiplyKernel(ocl, globalSimple, NULL))
         {
             return -1;
         }
@@ -3196,7 +3763,7 @@ cl_int kernelCorrectnessTesting(ocl_args_d_t* ocl, char** activationFunctionKern
             return -1;
         }
         start = high_resolution_clock::now();
-        if (CL_SUCCESS != mExecuteMultiplyKernelCustom2(ocl, global, local))
+        if (CL_SUCCESS != executeMultiplyKernel(ocl, global, local))
         {
             return -1;
         }
@@ -3219,7 +3786,7 @@ cl_int kernelCorrectnessTesting(ocl_args_d_t* ocl, char** activationFunctionKern
             return -1;
         }
         start = high_resolution_clock::now();
-        if (CL_SUCCESS != mExecuteMultiplyKernelCustom2(ocl, globalSimple, NULL))
+        if (CL_SUCCESS != executeMultiplyKernel(ocl, globalSimple, NULL))
         {
             return -1;
         }
@@ -3262,7 +3829,7 @@ cl_int kernelCorrectnessTesting(ocl_args_d_t* ocl, char** activationFunctionKern
         return -1;
     }
     start = high_resolution_clock::now();
-    if (CL_SUCCESS != mExecuteMultiplyKernelCustom2(ocl, global, local))
+    if (CL_SUCCESS != executeMultiplyKernel(ocl, global, local))
     {
         return -1;
     }
@@ -3283,7 +3850,7 @@ cl_int kernelCorrectnessTesting(ocl_args_d_t* ocl, char** activationFunctionKern
         return -1;
     }
     start = high_resolution_clock::now();
-    if (CL_SUCCESS != mExecuteMultiplyKernelCustom2(ocl, globalSimple, NULL))
+    if (CL_SUCCESS != executeMultiplyKernel(ocl, globalSimple, NULL))
     {
         return -1;
     }
@@ -3309,7 +3876,7 @@ cl_int kernelCorrectnessTesting(ocl_args_d_t* ocl, char** activationFunctionKern
 }
 
 //This function takes multiple measurements of latency and returns average for a specific set of dimensions
-cl_int kernelLatencyTestingAuxiliary(ocl_args_d_t* ocl, cl_kernel* activationFunctionKernels, 
+long long kernelLatencyTestingAuxiliary(ocl_args_d_t* ocl, cl_kernel* activationFunctionKernels, 
     const size_t global[2], const size_t local[2], int mDim, int pDim, int nDim, int iterations, int typeOfKernel) {
     //Testing matrices where each dimension has a different value
     cl_int err;
@@ -3353,7 +3920,7 @@ cl_int kernelLatencyTestingAuxiliary(ocl_args_d_t* ocl, cl_kernel* activationFun
 
     cl_uint timesSize = ((sizeof(long long) * iterations - 1) / 64 + 1) * 64;
     long long* times = (long long*)_aligned_malloc(timesSize, 4096);
-    for (int iter = 0; iter < iterations; iter++) {
+    for (int iter = 0; iter < iterations; ++iter) {
 
         ocl->kernel = *activationFunctionKernels;
         ocl->dstMem = matrixC;
@@ -3377,13 +3944,13 @@ cl_int kernelLatencyTestingAuxiliary(ocl_args_d_t* ocl, cl_kernel* activationFun
         }
 
         start = high_resolution_clock::now();
-        if (CL_SUCCESS != mExecuteMultiplyKernelCustom2(ocl, global, local))
+        if (CL_SUCCESS != executeMultiplyKernel(ocl, global, local))
         {
             return -1;
         }
         elapsed = std::chrono::high_resolution_clock::now() - start;
         microseconds = std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count();
-        std::cout << microseconds << " microseconds for this kernel \n";
+        //std::cout << microseconds << " microseconds for this kernel \n";
         times[iter] = microseconds;
     }
 
@@ -3402,29 +3969,42 @@ cl_int kernelLatencyTestingAuxiliary(ocl_args_d_t* ocl, cl_kernel* activationFun
     _aligned_free(times);
 
     std::cout << "Average time is " << avg << '\n';
-    system("pause");
-    return 0;
+    return avg;
 }
 
 //In contrast to kernelCorrectnessTesting, this function takes multiple measurements of latency and returns average over many different sets of dimensions
 void kernelLatencyTesting(ocl_args_d_t* ocl, cl_kernel* activationFunctionKernel,int iterations, int WGS, int TW, int typeOfKernel) {
 
-    int values[4] = { 128, 256, 512, 1024 };
+    int values[1] = { 1024 };//{128, 256, 512, 1024 };
     const size_t local[2] = { WGS, WGS / TW };
     int mDim, nDim;
 
 
-
-    for (int idx = 0; idx < 4; ++idx) {
+    long long out = 0;
+    long long avg = 0;
+    for (int idx = 0; idx < 1; ++idx) {
+        std::cout << "in iter of idx" << '\n';
         mDim = values[idx];
-        nDim = values[idx] / TW;
-        const size_t global[2] = {mDim, nDim};
+        nDim = values[idx];
+        const size_t global[2] = { mDim, nDim / TW };
         std::cout << "measuring for matrices of dimension " << mDim << '\n';
-        if (WGS == 0) //No work group size defined
-            kernelLatencyTestingAuxiliary(ocl, activationFunctionKernel, global, NULL, mDim, values[idx], nDim, iterations, typeOfKernel);
-        else
-            kernelLatencyTestingAuxiliary(ocl, activationFunctionKernel, global, local, mDim, values[idx], nDim, iterations, typeOfKernel);
+        if (WGS == 0) { //No work group size defined
+            for (int iter = 0; iter < iterations; ++iter) {
+                out = kernelLatencyTestingAuxiliary(ocl, activationFunctionKernel, global, NULL, mDim, values[idx], nDim, 1, typeOfKernel);
+                avg += out;
+            }
+        }
+        else {
+            for (int iter = 0; iter < iterations; ++iter) {
+                out = kernelLatencyTestingAuxiliary(ocl, activationFunctionKernel, global, local, mDim, values[idx], nDim, 1, typeOfKernel);
+                avg += out;
+            }
+        }
     }
+    avg = avg / iterations;
+    std::cout << "TOTAL AVERAGE IS " << avg << '\n';
+    system("pause");
+    return;
 }
 
 
@@ -3454,9 +4034,9 @@ int _tmain(int argc, TCHAR* argv[])
     // both nodes (as with deltas) and layers. This means I can just replace the 3rd loop with one
     //clEnqueueNDRangeKernel invocation (haven't done this yet, but will in the future).
 
-    const int batchSize = 512;
+    const int batchSize = 1024;
     const int layers = 3; //We don't count input as a layer
-    int dimAr[layers + 1] = {784, 1024, 512, 10}; //last layer should always be set to 1 for regression
+    int dimAr[layers + 1] = { 784, 1024, 1024, 10 }; //last layer should always be set to 1 for regression
     //cl_float correctOutput[batchSize] = { 1.0,2.0,3.0,4.0,5.0,6.0,7.0,-77.0,-8.0,8.5,9.2,-10.0}; //The desired output
     const int numAF = 4; //num of activation functions
     char* activationFunctionKernelNames[numAF] = { "Multiply_Buffer_Identity",
@@ -3466,7 +4046,7 @@ int _tmain(int argc, TCHAR* argv[])
     cl_kernel activationFunctionKernels[numAF], activationFunctionDeltaKernels[numAF];
     cl_kernel activationFunctionKernelsSimple[numAF], activationFunctionDeltaKernelsSimple[numAF];
 
-    int activationFunctions[layers] = {3,3,0}; // 0 for identity, 1 for tanh, 2 for sigmoid, 3 for ReLU
+    int activationFunctions[layers] = { 0,0,0 }; // 0 for identity, 1 for tanh, 2 for sigmoid, 3 for ReLU
 
     if (CL_SUCCESS != SetupOpenCL(&ocl, deviceType))
     {
@@ -3478,7 +4058,7 @@ int _tmain(int argc, TCHAR* argv[])
         return -1;
     }
 
-    
+
     for (int x = 0; x < numAF; ++x) {
         activationFunctionKernels[x] = clCreateKernel(ocl.program, activationFunctionKernelNames[x], &err);
         if (CL_SUCCESS != err)
@@ -3510,14 +4090,14 @@ int _tmain(int argc, TCHAR* argv[])
     int trainImageSize, valImageSize, numTrainImages, numTrainLabels, numValImages, numValLabels;
     uchar** trainingDataset = read_mnist_images("C:\\Users\\george cabon x1\\source\\repos\\GPUOpenCLProjectforWindows2\\GPUOpenCLProjectforWindows2\\MNIST\\train-images.idx3-ubyte", numTrainImages, trainImageSize);
     uchar* trainingLabels = read_mnist_labels("C:\\Users\\george cabon x1\\source\\repos\\GPUOpenCLProjectforWindows2\\GPUOpenCLProjectforWindows2\\MNIST\\train-labels.idx1-ubyte", numTrainLabels);
-    
+
     uchar** valDataset = read_mnist_images("C:\\Users\\george cabon x1\\source\\repos\\GPUOpenCLProjectforWindows2\\GPUOpenCLProjectforWindows2\\MNIST\\t10k-images.idx3-ubyte", numValImages, valImageSize);
     uchar* valLabels = read_mnist_labels("C:\\Users\\george cabon x1\\source\\repos\\GPUOpenCLProjectforWindows2\\GPUOpenCLProjectforWindows2\\MNIST\\t10k-labels.idx1-ubyte", numValLabels);
 
     std::cout << "There are " << numTrainImages << " with size " << valImageSize << '\n';
     std::cout << "First image label is " << (cl_float)trainingLabels[0] << '\n';
 
-    int epochs = 10;
+    int epochs = 1;
     int classes = 10;
 
     //minibatchGDCpp(dimAr, activationFunctions, batchSize, layers, classes, epochs, trainingDataset, trainingLabels,
@@ -3525,33 +4105,48 @@ int _tmain(int argc, TCHAR* argv[])
 
     //MAIN LOOP
     //{
-    //    int TS = 16;
-    //    mDim = 1024, pDim = 784, nDim = 512;
-    //    int WPT = 16;
-    //    const size_t global[2] = { mDim, nDim/WPT };
-    //    const size_t local[2] = { TS, TS/WPT};
+    //    int WGS = 16;
+    //    mDim = 1024, pDim = 768, nDim = 512;
+    //    int TW = 16;
+    //    const size_t global[2] = { mDim, nDim/TW };
+    //    const size_t local[2] = { WGS, WGS/TW};
     //    kernelCorrectnessTesting(&ocl, activationFunctionKernelNames, activationFunctionDeltaKernelNames, activationFunctionKernels,
     //        activationFunctionDeltaKernels, activationFunctionKernelsSimple, activationFunctionDeltaKernelsSimple, global,
     //        local, numAF, mDim, pDim, nDim);
     //}
-    //system("pause");
 
-    //{
-    //    int TW = 8;
-    //    int WGS = 16; //set to 0 to disable manual local size setting
-    //    int iterations = 50;
-    //    int typeOfKernel = 1; //1 through 3
-    //    kernelLatencyTesting(&ocl, &activationFunctionKernels[0], iterations, WGS, TW, typeOfKernel);
-    //}
+    {
+        int TW = 16;
+        int WGS = 16; //set to 0 to disable manual local size setting
+        int iterations = 20;
+        int typeOfKernel = 1;
+        cl_kernel weightKernel[1];
+        weightKernel[0] = clCreateKernel(ocl.program, "Update_Weights_Buffers", &err);
+        if (CL_SUCCESS != err)
+        {
+            LogError("Error: clCreateKernel returned %s\n", TranslateOpenCLError(err));
+            return -1;
+        }
+        kernelLatencyTesting(&ocl, &activationFunctionKernels[0], iterations, WGS, TW, typeOfKernel);
+        //kernelLatencyTesting(&ocl, &activationFunctionDeltaKernels[0], iterations, WGS, TW, typeOfKernel);
+        //kernelLatencyTesting(&ocl, weightKernel , iterations, WGS, TW, typeOfKernel);
+    }
 
 
+    //auto start = high_resolution_clock::now();
+    //auto elapsed = std::chrono::high_resolution_clock::now() - start;
+    //long long microseconds;
 
-    //minibatchGD(&ocl, dimAr, activationFunctions, activationFunctionKernels, activationFunctionKernelsSimple,
+    //std::cout << "REACHED MINIBATCHGD" << '\n';
+    //start = high_resolution_clock::now();
+    //minibatchGD2(&ocl, dimAr, activationFunctions, activationFunctionKernels, activationFunctionKernelsSimple,
     //    activationFunctionDeltaKernels, activationFunctionDeltaKernelsSimple, batchSize, layers, classes, epochs,
     //    trainingDataset, trainingLabels, numTrainImages, valDataset, valLabels, numValImages);
-
+    //elapsed = std::chrono::high_resolution_clock::now() - start;
+    //microseconds = std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count();
+    //std::cout << microseconds << " microseconds for training \n";
     //system("pause");
-    
+
     //float** weightsArray;
     //cl_mem* weightBuffers, * outputBuffers, * deltaBuffers, inputBuffer;
     //cl_float* correctOutput;
@@ -3607,7 +4202,7 @@ int _tmain(int argc, TCHAR* argv[])
     mGenerateMatrices(matrixAar, mDim, pDim);
     mGenerateMatrices(matrixBar, pDim, nDim);
     //mGenerateMatrices(matrixCar, mDim, nDim);
-    
+
     float(*matrixDar)[dim] = new float[dim][dim];
     float(*matrixEar)[dim] = new float[dim][dim];
     float(*matrixFar)[dim] = new float[dim][dim];
@@ -3677,10 +4272,10 @@ int _tmain(int argc, TCHAR* argv[])
         }
 
         auto start1 = high_resolution_clock::now();
-        int TS = 16;
-        int WPT = 8;
-        const size_t global[2] = { comdim, comdim / WPT };
-        const size_t local[2] = { TS,TS / WPT };
+        int WGS = 16;
+        int TW = 8;
+        const size_t global[2] = { comdim, comdim / TW };
+        const size_t local[2] = { WGS,WGS / TW };
         if (CL_SUCCESS != mExecuteMultiplyKernelCustom(&ocl, global, local))
         {
             return -1;
@@ -3704,441 +4299,5 @@ int _tmain(int argc, TCHAR* argv[])
         if ((i + 1) % nDim == 0) {
             std::cout << '\n';
         }
-    }
-
-    ocl.srcA = matrixA;
-    ocl.srcB = matrixB;
-    ocl.dstMem = matrixD;
-
-    ocl.kernel = clCreateKernel(ocl.program, "Matrix_Multiply_Kernel_1", &err);;
-    // Passing arguments into OpenCL kernel.
-    if (CL_SUCCESS != mSetKernelArguments(&ocl, NULL, mDim, pDim, nDim, 0.0, 1))
-    {
-        return -1;
-    }
-
-    auto start3 = high_resolution_clock::now();
-    if (CL_SUCCESS != mExecuteMultiplyKernel(&ocl, mDim, nDim))
-    {
-        return -1;
-    }
-    auto elapsed3 = std::chrono::high_resolution_clock::now() - start3;
-    long long microseconds3 = std::chrono::duration_cast<std::chrono::microseconds>(elapsed3).count();
-    std::cout << microseconds3 << " microseconds since epoch\n";
-
-    err = clEnqueueReadBuffer(ocl.commandQueue, matrixD, true, 0, sizeof(cl_float) * mDim * nDim, matrixDar, 0, NULL, NULL);
-    if (CL_SUCCESS != err)
-    {
-        LogError("Error: clEnqueueReadBuffer returned %s\n", TranslateOpenCLError(err));
-    }
-
-
-    for (cl_uint i = 0; i < mDim*nDim; ++i)
-    {
-        std::cout << matrixCar[i] << " ";
-        if ((i + 1) % nDim == 0) {
-            std::cout << '\n';
-        }
     }*/
-
-    /*
-    cl_uint optimizedSize = ((sizeof(cl_mem) * layers - 1) / 64 + 1) * 64;
-    cl_mem* buffersWeightsArray = (cl_mem*)_aligned_malloc(optimizedSize, 4096); //array of memory objects, where each memory object is an image of weights between layers
-
-    cl_mem* buffersOutsArray = (cl_mem*)_aligned_malloc(optimizedSize, 4096); //array of memory objects, where each memory object is an image of outputs of layers
-
-    cl_mem* buffersDeltasArray = (cl_mem*)_aligned_malloc(optimizedSize, 4096); //array of memory objects, where each memory object is an image of deltas of layers
-
-    cl_uint optimizedSizeIn = ((sizeof(cl_float) * Dims[0] * batchSize - 1) / 64 + 1) * 64;
-    cl_float* inArray = (cl_float*)_aligned_malloc(optimizedSizeIn, 4096); //array of network input
-    //std::cout << "Matrix input is \n";
-    mGenerateMatrices(inArray, Dims[0], batchSize);//TODO: have some code here to initiliaze inputArray with external training data
-    
-    if (NULL == buffersWeightsArray || NULL == buffersOutsArray || NULL == buffersDeltasArray ||NULL == inArray)
-    {
-        LogError("Error: _aligned_malloc failed to allocate buffers.\n");
-        return -1;
-    }
-
-    cl_mem bufferInArray = clCreateBuffer(ocl.context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(cl_float)*Dims[0]*batchSize, inArray, &err);
-    if (CL_SUCCESS != err)
-    {
-        LogError("Error: clCreateImage for srcA returned %s\n", TranslateOpenCLError(err));
-        return err;
-    }
-
-    cl_uint optimizedSizeTempOutAndDelta;
-    cl_uint optimizedSizeTempW;
-    cl_float* tempWeightArray;
-    
-    for (cl_uint x = 0; x < layers; ++x) {
-            mDim = Dims[x + 1];
-            pDim = Dims[x];
-            //optimizedSizeTempOutAndDelta = ((sizeof(cl_int) * mDim - 1) / 64 + 1) * 64;
-            optimizedSizeTempW = ((sizeof(cl_float) * mDim * pDim - 1) / 64 + 1) * 64;
-            tempWeightArray = (cl_float*)_aligned_malloc(optimizedSizeTempW, 4096);
-            std::cout << "Weights of layer " << x << " are: \n";
-            mGenerateMatrices(tempWeightArray, mDim, pDim);
-
-            // Create first buffer based on host memory inputA
-            buffersWeightsArray[x] = clCreateBuffer(ocl.context, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR, sizeof(cl_float) * mDim * pDim, tempWeightArray, &err);
-            if (CL_SUCCESS != err)
-            {
-                LogError("Error: clCreateImage for srcA returned %s\n", TranslateOpenCLError(err));
-                return err;
-            }
-
-            buffersOutsArray[x] = clCreateBuffer(ocl.context, CL_MEM_READ_WRITE, sizeof(cl_float) * mDim * batchSize, NULL, &err);
-            if (CL_SUCCESS != err)
-            {
-                LogError("Error: clCreateImage for srcA returned %s\n", TranslateOpenCLError(err));
-                return err;
-            }
-
-            buffersDeltasArray[x] = clCreateBuffer(ocl.context, CL_MEM_READ_WRITE, sizeof(cl_float) * mDim * batchSize, NULL, &err);
-            if (CL_SUCCESS != err)
-            {
-                LogError("Error: clCreateImage for srcA returned %s\n", TranslateOpenCLError(err));
-                return err;
-            }
-            _aligned_free(tempWeightArray);
-    }*/
-
-    //auto duration = duration_cast<microseconds>(stop - start);
-    //std::cout << duration.count() << '\n';
-
-    //err = clEnqueueReadBuffer(ocl.commandQueue, matrixC, true, 0, sizeof(cl_float) *mDim*nDim, matrixCar, 0, NULL, NULL);
-    //if (CL_SUCCESS != err)
-    //{
-    //    LogError("Error: clEnqueueReadBuffer returned %s\n", TranslateOpenCLError(err));
-    //}
-    //for (cl_uint i = 0; i < mDim*nDim; ++i)
-    //{
-    //    std::cout << matrixCar[i] << " ";
-    //    if ((i + 1) % nDim == 0) {
-    //        std::cout << '\n';
-    //    }
-    //}
-
-
-
-
-    /*int iterations = 250;
-    int optimizedSizeCosts = ((sizeof(cl_float) * iterations - 1) / 64 + 1) * 64;
-    cl_float* costs = (cl_float*)_aligned_malloc(optimizedSizeCosts, 4096);
-    using namespace std::chrono;
-    auto start = high_resolution_clock::now();
-
-
-
-    
-    for (int iter = 0; iter < iterations; iter++) {
-        std::cout << "iteration here \n";
-        ocl.dstMem = bufferInArray;
-        nDim = batchSize;
-        for (int x = 0; x < layers; ++x) {
-
-            mDim = Dims[x + 1];
-            pDim = Dims[x];
-
-            ocl.srcA = buffersWeightsArray[x];
-            ocl.srcB = ocl.dstMem;
-            ocl.dstMem = buffersOutsArray[x];
-
-            // Program consists of kernels.
-            // Each kernel can be called (enqueued) from the host part of OpenCL application.
-            // To call the kernel, you need to create it from existing program.
-            ocl.kernel = activationFunctionKernels[ActivationFunctions[x]];
-            // Passing arguments into OpenCL kernel.
-            if (CL_SUCCESS != mSetKernelArguments(&ocl, NULL, mDim, pDim, nDim, 0.0, 1))
-            {
-                return -1;
-            }
-            //if (CL_SUCCESS != mExecuteMultiplyKernel(&ocl, mDim, nDim))
-            if (CL_SUCCESS != mExecuteMultiplyKernel(&ocl, mDim, nDim))
-            {
-                return -1;
-            }
-        }
-
-        //Using the mean squared error (MSE) cost function, we apply backpropagation
-        //First, let's compute the cost function
-        //TODO: CHANGE THIS TO ACCOMMODATE NON-SINGLE OUTPUT NODE ARCHITECTURES
-        cl_uint optimizedSizeNetworkOutput = ((sizeof(cl_float)*batchSize - 1) / 64 + 1) * 64;
-        cl_float* resultPtr1 = (cl_float*)_aligned_malloc(optimizedSizeNetworkOutput, 4096);
-        cl_float* networkOutput = (cl_float*)_aligned_malloc(optimizedSizeNetworkOutput, 4096);
-        err = clEnqueueReadBuffer(ocl.commandQueue, ocl.dstMem, true, 0, sizeof(cl_float)*batchSize, resultPtr1, 0, NULL, NULL);
-        if (CL_SUCCESS != err)
-        {
-            LogError("Error: clEnqueueReadBuffer returned %s\n", TranslateOpenCLError(err));
-        }
-        for (int x = 0; x < batchSize; ++x) {
-            networkOutput[x] = resultPtr1[x];
-        }
-        costs[iter] = MSECostFunction(correctOutput, resultPtr1, batchSize);
-
-        //Then, let's compute the deltas, starting with the output delta 
-        for (int x = 0; x < batchSize; ++x) {
-            resultPtr1[x] = resultPtr1[x] - correctOutput[x];
-        }
-
-        if (ActivationFunctions[layers - 1] == 0) {
-            for (int x = 0; x < batchSize; ++x) {
-                networkOutput[x] = 1.0;
-            }
-        }
-        else if (ActivationFunctions[layers - 1] == 1) {
-            for (int x = 0; x < batchSize; ++x) {
-                networkOutput[x] = networkOutput[x] * (1.0 - networkOutput[x]);
-            }
-        }
-        else if (ActivationFunctions[layers - 1] == 2) {
-            for (int x = 0; x < batchSize; ++x) {
-                networkOutput[x] = 1.0 - networkOutput[x] * networkOutput[x];
-            }
-        }
-        else if (ActivationFunctions[layers - 1] == 3) {
-            for (int x = 0; x < batchSize; ++x) {
-                if (networkOutput[x] == 0.0)
-                    networkOutput[x] = 0.0;
-                else
-                    networkOutput[x] = 1.0;
-            }
-        }
-        for (int x = 0; x < batchSize; ++x) {
-            // std::cout << "Output delta function term "<<x<<" is: " << networkOutput[x] << '\n';
-            // std::cout << "Output delta pre function term " << x << "is: " << resultPtr1[x] << '\n';
-        }
-
-        for (int x = 0; x < batchSize; ++x) {
-            resultPtr1[x] = resultPtr1[x] * networkOutput[x];
-        }
-        for (int x = 0; x < batchSize; ++x) {
-            // std::cout << "Output delta term "<<x<<" is: " << resultPtr1[x] << '\n';
-        }
-        err = clEnqueueWriteBuffer(ocl.commandQueue, buffersDeltasArray[layers - 1], true, 0, sizeof(cl_float) * batchSize, resultPtr1, 0, NULL, NULL);
-        if (CL_SUCCESS != err)
-        {
-            LogError("Error: clEnqueueReadBuffer returned %s\n", TranslateOpenCLError(err));
-        }
-        _aligned_free(resultPtr1);
-        _aligned_free(networkOutput);
-
-        //non-output deltas calculation loop
-        ocl.dstMem = buffersDeltasArray[layers - 1];
-        cl_mem outputs;
-        nDim = batchSize;
-        for (int x = layers - 1; x > 0; --x) {
-
-            mDim = Dims[x];
-            pDim = Dims[x + 1];
-            ocl.srcA = buffersWeightsArray[x];
-            ocl.srcB = ocl.dstMem;
-            ocl.dstMem = buffersDeltasArray[x - 1];
-            outputs = buffersOutsArray[x - 1];
-
-            // Program consists of kernels.
-            // Each kernel can be called (enqueued) from the host part of OpenCL application.
-            // To call the kernel, you need to create it from existing program.
-            ocl.kernel = activationFunctionDeltasKernels[ActivationFunctions[x]];
-            // Passing arguments into OpenCL kernel.
-            if (CL_SUCCESS != mSetKernelArguments(&ocl, &outputs, mDim, pDim, nDim, 0.0, 2))
-            {
-                return -1;
-            }
-            bool queueProfilingEnable = true;
-            if (queueProfilingEnable)
-                QueryPerformanceCounter(&performanceCountNDRangeStart);
-            // Execute (enqueue) the kernel
-            if (CL_SUCCESS != mExecuteMultiplyKernel(&ocl, mDim, nDim)) //thankfully, the same function works for our Multiply_Deltas kernel too
-            {
-                return -1;
-            }
-            if (queueProfilingEnable)
-                QueryPerformanceCounter(&performanceCountNDRangeStop);
-            //std::cout << "Outputing delta from layer " << x << '\n';
-        }
-
-        //perform weight updates now. We can potentially parallelize this fully even across all network layers
-        //but for now it's only across the weights of each layer and then sequentially across layers
-        cl_float learning_rate = 0.03;
-        for (int x = layers - 1; x >= 0; --x) {
-            //std::cout << "I'm in iteration " << x << " of the weight update loop \n";
-            mDim = Dims[x + 1];
-            nDim = Dims[x];
-            ocl.srcA = buffersDeltasArray[x];
-            ocl.dstMem = buffersWeightsArray[x];
-            if (x != 0) {
-                ocl.srcB = buffersOutsArray[x - 1];
-            }
-            else {
-                ocl.srcB = bufferInArray;
-            }
-
-            ocl.kernel = clCreateKernel(ocl.program, "Update_Weights_Buffers", &err);
-            if (CL_SUCCESS != err)
-            {
-                LogError("Error: clCreateKernel returned %s\n", TranslateOpenCLError(err));
-                return -1;
-            }
-
-            if (CL_SUCCESS != mSetKernelArguments(&ocl, NULL, mDim, nDim, batchSize, learning_rate, 3))
-            {
-                return -1;
-            }
-
-            bool queueProfilingEnable = true;
-            if (queueProfilingEnable)
-                QueryPerformanceCounter(&performanceCountNDRangeStart);
-            // Execute (enqueue) the kernel
-
-            if (CL_SUCCESS != mExecuteMultiplyKernel(&ocl, mDim, nDim)) //thankfully, the same function works for our Multiply_Deltas kernel too
-            {
-                return -1;
-            }
-            if (queueProfilingEnable)
-                QueryPerformanceCounter(&performanceCountNDRangeStop);
-            //std::cout << "Outputing weights from layer " << x << '\n';
-            if (iter == 249) {
-                cl_float* tempiboy2;
-                int tempo1 = Dims[x + 1];
-                int tempo2 = Dims[x];
-                int arraySize = tempo1*tempo2;
-                optimizedSizeTempW = ((sizeof(cl_float) * tempo1 *tempo2 -1) / 64 + 1) * 64;
-                tempiboy2 = (cl_float*)_aligned_malloc(optimizedSizeTempW, 4096);
-
-                err = clEnqueueReadBuffer(ocl.commandQueue, ocl.dstMem, true, 0, sizeof(cl_float) * arraySize, tempiboy2, 0, NULL, NULL);
-                if (CL_SUCCESS != err)
-                {
-                    LogError("Error: clEnqueueReadBuffer returned %s\n", TranslateOpenCLError(err));
-                }
-                for (cl_uint i = 0; i < arraySize; ++i)
-                {
-                    std::cout << tempiboy2[i] << " ";
-                    if ((i + 1) % tempo2 == 0) {
-                        std::cout << '\n';
-                    }
-                }
-                std::cout << '\n';
-                _aligned_free(tempiboy2);
-            }
-        }
-    }
-    using namespace std::chrono;
-
-    auto stop = high_resolution_clock::now();
-    auto duration = duration_cast<microseconds>(stop - start);
-    std::cout << duration.count() << '\n';
-        
-    for (int i = 0; i < iterations; i++) {
-            std::cout << costs[i] << '\n';
-    }
-
-    std::cout << "Printing final weight values";
-
-    cl_float* tempiboy;
-    for (cl_uint x = 0; x < layers; ++x) {
-        mDim = Dims[x + 1];
-        pDim = Dims[x];
-        int arraySize = mDim * pDim;
-        optimizedSizeTempW = ((sizeof(cl_float) * mDim * pDim - 1) / 64 + 1) * 64;
-        tempiboy =  (cl_float*)_aligned_malloc(optimizedSizeTempW, 4096);
-
-        err = clEnqueueReadBuffer(ocl.commandQueue, buffersWeightsArray[x], true, 0, sizeof(cl_float) * arraySize, tempiboy, 0, NULL, NULL);
-        if (CL_SUCCESS != err)
-        {
-            LogError("Error: clEnqueueReadBuffer returned %s\n", TranslateOpenCLError(err));
-        }
-        
-
-        for (cl_uint i = 0; i < arraySize; ++i)
-        {
-            std::cout << tempiboy[i] << " ";
-            if ((i + 1) % pDim == 0) {
-                std::cout << '\n';
-            }
-        }
-        std::cout << '\n';
-        _aligned_free(tempiboy);
-    }
-
-
-    std::cout << "Printed them";
-
-    //Deallocate dynamic memory and release memory objects
-    for (cl_uint x = 0; x < layers; ++x) {
-            //std::cout << "releasing obj num" << x;
-            clReleaseMemObject(buffersOutsArray[x]);
-            clReleaseMemObject(buffersWeightsArray[x]);
-            clReleaseMemObject(buffersDeltasArray[x]);
-    }
-
-    for (int x = 0; x < numAF; ++x) {
-            clReleaseKernel(activationFunctionKernels[x]);
-            clReleaseKernel(activationFunctionDeltasKernels[x]);
-    }
-    //_aligned_free(costs);
-    _aligned_free(buffersOutsArray);
-    _aligned_free(buffersWeightsArray);
-    _aligned_free(buffersDeltasArray);
-    clReleaseMemObject(bufferInArray);
-                   
-    //cl_platform_id platformId = FindOpenCLPlatform("Intel", deviceType);
-    //PrintDeviceIDs(platformId);
-    std::cout << "please ereach here \n";
-    system("pause");
-    return 0;*/
 }
-
-
-    //    mdim = 1000;
-    //    pdim = 1000;
-    //    ndim = 1000;
-
-    //    cl_uint optimizedsizetempw1 = ((sizeof(cl_float) * mdim * pdim - 1) / 64 + 1) * 64;
-    //    cl_uint optimizedsizetempw2 = ((sizeof(cl_float) * ndim * pdim - 1) / 64 + 1) * 64;
-    //    cl_float* tempweightarray1 = (cl_float*)_aligned_malloc(optimizedsizetempw1, 4096);
-    //    cl_float* tempweightarray2 = (cl_float*)_aligned_malloc(optimizedsizetempw2, 4096);
-    //    //std::cout << "weights of layer " << x << " are: \n";
-
-
-    //    // create first image based on host memory inputa
-    //    cl_mem buffersweightsarray3 = clcreatebuffer(ocl.context, cl_mem_read_write, sizeof(cl_float) * mdim * ndim, null, &err);
-
-    //    if (cl_success != setupopencl(&ocl, devicetype))
-    //    {
-    //        return -1;
-    //    }
-
-    //    // create and build the opencl program
-    //    if (cl_success != createandbuildprogram(&ocl))
-    //    {
-    //        return -1;
-    //    }
-
-    //    cl_mem buffersweightsarray1;
-    //    cl_mem buffersweightsarray2;
-    //    int iterations = 1;
-    //    auto start = high_resolution_clock::now();
-    //    for (int x = 0; x < iterations; ++x) {
-    //        mgeneratematrices(tempweightarray1, mdim, pdim);
-    //        mgeneratematrices(tempweightarray2, pdim, ndim);
-    //        buffersweightsarray1 = clcreatebuffer(ocl.context, cl_mem_read_write | cl_mem_copy_host_ptr, sizeof(cl_float) * mdim * pdim, tempweightarray1, &err);
-    //        buffersweightsarray2 = clcreatebuffer(ocl.context, cl_mem_read_write | cl_mem_copy_host_ptr, sizeof(cl_float) * pdim * ndim, tempweightarray2, &err);
-    //        ocl.srca = buffersweightsarray1;
-    //        ocl.srcb = buffersweightsarray2;
-    //        ocl.dstmem = buffersweightsarray3;
-
-    //        ocl.kernel = clcreatekernel(ocl.program, "multiply_buffer_identity", &err);
-    //        if (cl_success != msetkernelarguments(&ocl, null, mdim, pdim, ndim, 0.0, 1))
-    //        {
-    //            return -1;
-    //        }
-    //        if (cl_success != mexecutemultiplykernel(&ocl, mdim, 1))
-    //        {
-    //            return -1;
-    //        }
-    //        clreleasememobject(buffersweightsarray1);
-    //        clreleasememobject(buffersweightsarray2);
-    //    }
-    //}

@@ -194,6 +194,15 @@
     <ClInclude Include="utils.h" />
   </ItemGroup>
   <ItemGroup>
+    <Intel_OpenCL_Build_Rules Include="Kernel1.cl">
+      <ASM Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">0</ASM>
+      <FastRelaxedMath Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">false</FastRelaxedMath>
+    </Intel_OpenCL_Build_Rules>
+    <Intel_OpenCL_Build_Rules Include="kernel1b.cl">
+      <ASM Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">0</ASM>
+    </Intel_OpenCL_Build_Rules>
+    <Intel_OpenCL_Build_Rules Include="Kernel2.cl" />
+    <Intel_OpenCL_Build_Rules Include="Kernel3.cl" />
     <Intel_OpenCL_Build_Rules Include="Template.cl" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

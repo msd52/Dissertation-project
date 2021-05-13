@@ -497,7 +497,7 @@
        </contextValue>
        <contextValue>
         <id>gpuUsageCollection</id>
-        <value type="bool">false</value>
+        <value type="bool">true</value>
        </contextValue>
        <contextValue>
         <id>groupForGPUCustomControl</id>
@@ -513,11 +513,126 @@
        </contextValue>
        <contextValue>
         <id>metricsGroup</id>
-        <value>overview</value>
+        <value>global-local-accesses</value>
        </contextValue>
        <contextValue>
         <id>profilingMode</id>
-        <value>bb-latency</value>
+        <value>mem-latency</value>
+       </contextValue>
+      </knob_values>
+     </at_start_point>
+     <at_start_point>
+      <at_path>C:\Program Files (x86)\IntelSWTools\sw_dev_tools\VTune_Profiler_2020\config\analysis_type\microarchitecture_exploration.cfg</at_path>
+      <knob_values>
+       <contextValue>
+        <id>collectBadSpeculation</id>
+        <value type="bool">true</value>
+       </contextValue>
+       <contextValue>
+        <id>collectCoreBound</id>
+        <value type="bool">true</value>
+       </contextValue>
+       <contextValue>
+        <id>collectFrontendBound</id>
+        <value type="bool">true</value>
+       </contextValue>
+       <contextValue>
+        <id>collectMemoryBW</id>
+        <value type="bool">true</value>
+       </contextValue>
+       <contextValue>
+        <id>collectMemoryBound</id>
+        <value type="bool">true</value>
+       </contextValue>
+       <contextValue>
+        <id>collectRetiring</id>
+        <value type="bool">true</value>
+       </contextValue>
+       <contextValue>
+        <id>dramBandwidthLimitsAT</id>
+        <value type="bool">true</value>
+       </contextValue>
+       <contextValue>
+        <id>enableStackCollect</id>
+        <value type="bool">false</value>
+       </contextValue>
+       <contextValue>
+        <id>groupForSelectMetrics</id>
+        <value type="null"></value>
+       </contextValue>
+       <contextValue>
+        <id>initialViewpoint</id>
+        <value>%SNBGeneralExplorationViewpointName</value>
+       </contextValue>
+       <contextValue>
+        <id>pmuSamplingCountSwitch</id>
+        <value>detailed</value>
+       </contextValue>
+       <contextValue>
+        <id>samplingInterval</id>
+        <value type="double">1</value>
+       </contextValue>
+      </knob_values>
+     </at_start_point>
+     <at_start_point>
+      <at_path>C:\Program Files (x86)\IntelSWTools\sw_dev_tools\VTune_Profiler_2020\config\analysis_type\memory_access.cfg</at_path>
+      <knob_values>
+       <contextValue>
+        <id>analyzeCAT</id>
+        <value type="bool">false</value>
+       </contextValue>
+       <contextValue>
+        <id>analyzeMemoryObjects</id>
+        <value type="bool">false</value>
+       </contextValue>
+       <contextValue>
+        <id>analyzeOpenMPRegions</id>
+        <value type="bool">false</value>
+       </contextValue>
+       <contextValue>
+        <id>dramBandwidthLimitsAT</id>
+        <value type="bool">true</value>
+       </contextValue>
+       <contextValue>
+        <id>enableMemoryObjectGrouper</id>
+        <value type="bool">false</value>
+       </contextValue>
+       <contextValue>
+        <id>initialViewpoint</id>
+        <value>%SNBBandwidthViewpointName</value>
+       </contextValue>
+       <contextValue>
+        <id>memoryObjectMinSize</id>
+        <value type="s32_t">1024</value>
+       </contextValue>
+       <contextValue>
+        <id>samplingInterval</id>
+        <value type="double">1</value>
+       </contextValue>
+      </knob_values>
+     </at_start_point>
+     <at_start_point>
+      <at_path>C:\Program Files (x86)\IntelSWTools\sw_dev_tools\VTune_Profiler_2020\config\analysis_type\gpu_offload.cfg</at_path>
+      <knob_values>
+       <contextValue>
+        <id>collectMemoryBW</id>
+        <value type="bool">false</value>
+       </contextValue>
+       <contextValue>
+        <id>enableStackCollect</id>
+        <value type="bool">false</value>
+       </contextValue>
+       <contextValue>
+        <id>gpuHwCollection</id>
+        <value type="bool">true</value>
+       </contextValue>
+       <contextValue>
+        <id>gpuOpenCLCollection</id>
+        <value type="bool">true</value>
+       </contextValue>
+       <contextValue>
+        <id>initialViewpoint</id>
+        <value>%CpuGpuInteractionViewpointName</value>
        </contextValue>
       </knob_values>
      </at_start_point>

@@ -20,75 +20,10 @@
  * problem reports or change requests be submitted to it directly
  *****************************************************************************/
 
-//constant sampler_t sampler = CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP | CLK_FILTER_NEAREST;
-
-#define TS 16
-#define WPT 8
-#define RTS 2
-#define WPTM 4
-#define WPTN 4
 #define DEBUG_FORWARD false
 #define DEBUG_DELTAS false
 #define DEBUG_UPDATE false
 
-
-//2D register tiling
-/*__kernel void Matrix_Multiply_Kernel_4(global float* matrixA, global float* matrixB, global float* matrixC,
-const int mDim, const int pDim, const int nDim)
-{  
-
- // Thread identifiers
-    const int row = get_local_id(0); // Local row ID (max: TS)
-    const int col = get_local_id(1); // Local col ID (max: TS/WPT == RTS)
-    const int globalRow = TS*get_group_id(0) + row; // Row ID of C (0..M)
-    const int globalCol = TS*get_group_id(1) + col; // Col ID of C (0..N)
- 
-    // Local memory to fit a tile of TS*TS elements of A and B
-    __local float Asub[TS][TS];
-    __local float Bsub[TS][TS];
- 
-    // Initialise the accumulation registers
-    float acc[WPTM][WPTN];
- 
-    // Initialise the accumulation registers
-    for (int wm=0; wm<WPTM; wm++) {
-        for (int wn=0; wn<WPTN; wn++) {
-            acc[wm][wn] = 0.0f;
-        }
-    }
-    
-    // Loop over all tiles
-    const int numTiles = pDim/TS;
-    for (int t=0; t<numTiles; t++) {
- 
-        // Load one tile of A and B into local memory
-        const int tiledRow = TS*t + row;
-        const int tiledCol = TS*t + col;
-        for (int w=0; w<WPT; w++) {
-            Asub[row][col+w*RTS] = matrixA[globalRow*pDim+(tiledCol + w*RTS)];
-            Bsub[row][col+w*RTS] = matrixB[(globalCol + w*RTS) + tiledRow*pDim];
-        }
-        
-        // Synchronise to make sure the tile is loaded
-        barrier(CLK_LOCAL_MEM_FENCE);
- 
-        // Perform the computation for a single tile
-        for (int k=0; k<TS; k++) {
-            //UNROLLED
-            for (int w=0; w<WPT; ++w) {
-                acc[w] += Asub[row][k] * Bsub[k][col + w*RTS];
-            }
-        }
- 
-        // Synchronise before loading the next tile
-        barrier(CLK_LOCAL_MEM_FENCE);
-    }
- 
-    // Store the final results in C
-    for (int w=0; w<WPT; ++w) {
-        matrixC[(globalCol + w*RTS) + globalRow*pDim] = acc[w];
-    }
-}*/
 
 
 __kernel void Multiply_Buffer_Identity(global float* matrixA, global float* matrixB, global float* matrixC,
@@ -98,12 +33,15 @@ const int mDim, const int pDim, const int nDim, global float* biases)
     const int c = get_global_id(1);
     float finalValue = 0.0;
 
-    __attribute__((opencl_unroll_hint(16)))
+    //prefetch(&(biases[r]),1);
+    //__attribute__((opencl_unroll_hint(16)))
     for (int p = 0 ; p < pDim ; p++){
         //prefetch(&(matrixB[nDim*(p+4)+c]), 1);
+        //prefetch(&(matrixA[pDim*r+p+4]), 1);
         finalValue+=matrixA[pDim*r+p]*matrixB[nDim*p+c];
     }
-    //prefetch(&(biases[r]),1);
+
+    //printf("come here");
     matrixC[r*nDim+c] = finalValue+biases[r];
     #if DEBUG_FORWARD == true
         if (r==0 && c==0){
