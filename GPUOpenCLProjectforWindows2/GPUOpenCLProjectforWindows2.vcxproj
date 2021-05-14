@@ -186,24 +186,22 @@
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="GPUOpenCLProjectforWindows.cpp" />
-    <ClCompile Include="utils.cpp" />
+    <ClCompile Include="NaiveC++Mini-batch\NaiveC++Mini-batch.cpp" />
+    <ClCompile Include="OpenCLMini-batch\OpenCLMini-batch.cpp">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">false</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="OpenCLMini-batch\utils.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="GPUOpenCLProjectforWindows.h" />
-    <ClInclude Include="utils.h" />
+    <ClInclude Include="NaiveC++Mini-batch\NaiveC++Mini-batch.h" />
+    <ClInclude Include="OpenCLMini-batch\OpenCLMini-batch.h" />
+    <ClInclude Include="OpenCLMini-batch\utils.h" />
   </ItemGroup>
   <ItemGroup>
-    <Intel_OpenCL_Build_Rules Include="Kernel1.cl">
-      <ASM Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">0</ASM>
-      <FastRelaxedMath Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">false</FastRelaxedMath>
-    </Intel_OpenCL_Build_Rules>
-    <Intel_OpenCL_Build_Rules Include="kernel1b.cl">
-      <ASM Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">0</ASM>
-    </Intel_OpenCL_Build_Rules>
-    <Intel_OpenCL_Build_Rules Include="Kernel2.cl" />
-    <Intel_OpenCL_Build_Rules Include="Kernel3.cl" />
-    <Intel_OpenCL_Build_Rules Include="Template.cl" />
+    <Intel_OpenCL_Build_Rules Include="OpenCLMini-batch\kernels\Kernel1.cl" />
+    <Intel_OpenCL_Build_Rules Include="OpenCLMini-batch\kernels\kernel1b.cl" />
+    <Intel_OpenCL_Build_Rules Include="OpenCLMini-batch\kernels\Kernel2.cl" />
+    <Intel_OpenCL_Build_Rules Include="OpenCLMini-batch\kernels\Kernel3.cl" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

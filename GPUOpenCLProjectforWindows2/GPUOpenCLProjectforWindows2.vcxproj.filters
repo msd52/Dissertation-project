@@ -15,35 +15,38 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="utils.cpp">
+    <ClCompile Include="OpenCLMini-batch\utils.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="GPUOpenCLProjectforWindows.cpp">
+    <ClCompile Include="OpenCLMini-batch\OpenCLMini-batch.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="NaiveC++Mini-batch\NaiveC++Mini-batch.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="utils.h">
+    <ClInclude Include="OpenCLMini-batch\utils.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="GPUOpenCLProjectforWindows.h">
+    <ClInclude Include="NaiveC++Mini-batch\NaiveC++Mini-batch.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="OpenCLMini-batch\OpenCLMini-batch.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
-    <Intel_OpenCL_Build_Rules Include="Template.cl">
+    <Intel_OpenCL_Build_Rules Include="OpenCLMini-batch\kernels\Kernel3.cl">
       <Filter>OpenCL Files</Filter>
     </Intel_OpenCL_Build_Rules>
-    <Intel_OpenCL_Build_Rules Include="Kernel3.cl">
+    <Intel_OpenCL_Build_Rules Include="OpenCLMini-batch\kernels\Kernel2.cl">
       <Filter>OpenCL Files</Filter>
     </Intel_OpenCL_Build_Rules>
-    <Intel_OpenCL_Build_Rules Include="Kernel2.cl">
+    <Intel_OpenCL_Build_Rules Include="OpenCLMini-batch\kernels\kernel1b.cl">
       <Filter>OpenCL Files</Filter>
     </Intel_OpenCL_Build_Rules>
-    <Intel_OpenCL_Build_Rules Include="kernel1b.cl">
-      <Filter>OpenCL Files</Filter>
-    </Intel_OpenCL_Build_Rules>
-    <Intel_OpenCL_Build_Rules Include="Kernel1.cl">
+    <Intel_OpenCL_Build_Rules Include="OpenCLMini-batch\kernels\Kernel1.cl">
       <Filter>OpenCL Files</Filter>
     </Intel_OpenCL_Build_Rules>
   </ItemGroup>
